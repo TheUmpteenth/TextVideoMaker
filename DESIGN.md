@@ -60,19 +60,21 @@ output:
 
 defaults:                # optional; applies to every segment unless overridden
   fit: cover             # cover = fill frame & crop | contain = letterbox | blurpad = blurred copy fills bars
+  background: black      # colour for contain bars and transparent-PNG areas (name/#rrggbb/#rrggbbaa)
   text_style:
-    font: assets/fonts/Inter-Bold.ttf
+    font: null           # null = bundled Montserrat; or a path to a .ttf
     size: 72             # px at 1080-wide reference, scaled for other sizes
     color: white
-    outline: black       # 0-width to disable
+    outline: black       # null to disable
+    outline_width: 4
     position: bottom     # top | center | bottom, or [x, y] fractions like [0.5, 0.8]
-    margin: 0.08         # fraction of frame height kept clear at the anchored edge
+    margin: 0.08         # fraction of frame height kept clear at the anchored edge (keyword only)
 
-audio:
-  - file: assets/music/track1.mp3
-    start: 12.5          # seconds into the audio file to start from (optional)
-    gain: 0.0            # dB adjustment
-  # later: multiple entries = concatenated / crossfaded background track
+audio:                   # single optional soundtrack (one mapping, not a list)
+  file: assets/music/track1.mp3
+  start: 12.5            # seconds into the audio file to start from (optional)
+  gain: 0.0             # dB adjustment
+  if_short: loop         # loop | silence — how to fill if the track is shorter than the video
   fade_out: 1.0          # fade the soundtrack at the end of the video
 
 segments:                # played in order; total video length = sum of segment lengths
@@ -83,7 +85,8 @@ segments:                # played in order; total video length = sum of segment 
   - video: assets/clips/zoomies.mp4
     in: 3.0              # trim: use source from 3.0s...
     out: 7.5             # ...to 7.5s (omit both = whole clip)
-    source_audio: mute   # mute (default) | solo (replaces soundtrack for this segment) | mix
+    source_audio: mix    # mute (default) | solo (replaces soundtrack here) | mix (layers over it)
+    source_gain: -4.0    # dB applied to this clip's own audio (solo/mix)
     text: |
       Zoomies at
       6am. Every day.
@@ -91,6 +94,8 @@ segments:                # played in order; total video length = sum of segment 
 
   - image: assets/photos/dog2.jpg
     duration: 2.0        # no text on this one
+    fit: blurpad
+    background: "#fefeeb"  # per-segment override of the default background
 ```
 
 Notes on the model:
@@ -170,12 +175,15 @@ layout math / timeline (generated fixture media, no real photos in the repo).
 Out (deliberately): `source_audio: solo|mix`, `blurpad`, transitions, fractional text
 positioning, auto mode.
 
-**M2 — control**
-`source_audio: solo`, then `mix` with per-segment gain; crossfade transition option;
-`blurpad` fit; `background:` colour for `contain` bars and transparent-PNG areas
-(currently hard-coded black — surfaced by the cream-logo test, where the transparent
-logo flattened onto black); position-as-fraction text placement; `audio.if_short:
-loop|silence` config.
+**M2 — control** *(mostly DONE)*
+Done and verified on real media: `source_audio: solo|mix` with per-segment
+`source_gain` (the founding "toggle the clip's audio" requirement — solo ducks the
+soundtrack for its window, mix layers over it); `blurpad` fit; `background:` colour for
+`contain` bars and transparent-PNG areas (fixes the cream-logo-on-black finding);
+position-as-fraction text placement (keywords retained); `audio.if_short: loop|silence`.
+Remaining: **crossfade transition** — deferred as its own step because it reworks the
+timeline (segments overlap, so total length shrinks and the audio graph must follow the
+overlapped starts); the rest of M2 is additive and shipped first.
 
 **M3 — generator: many specs from a pile of assets** *(top priority — the "don't
 write YAML by hand" tool)*

@@ -10,20 +10,24 @@ from textvideomaker.timeline import build_timeline
 class StubProber:
     """Prober stand-in returning a fixed duration for every file."""
 
-    def __init__(self, duration=10.0):
+    def __init__(self, duration=10.0, has_audio=True):
         self.duration = duration
+        self.has_audio = has_audio
 
     def probe(self, path):
-        return MediaInfo(duration=self.duration, width=1280, height=720, has_audio=True)
+        return MediaInfo(duration=self.duration, width=1280, height=720,
+                         has_audio=self.has_audio)
 
 
 BASE = Path("C:/fake")
 
 
-def make_spec(segments, audio=None):
+def make_spec(segments, audio=None, defaults=None):
     data = {"segments": segments}
     if audio:
         data["audio"] = audio
+    if defaults:
+        data["defaults"] = defaults
     return Spec.model_validate(data)
 
 
@@ -67,3 +71,33 @@ def test_audio_resolved_and_fade_capped():
     assert tl.audio is not None
     assert tl.audio.start == 3
     assert tl.audio.fade_out == 1  # capped at video length
+
+
+# ---- M2 ---------------------------------------------------------------------
+
+def test_clip_carries_m2_fields():
+    spec = make_spec(
+        [{"video": "b.mp4", "source_audio": "mix", "source_gain": -3,
+          "background": "#0a0a0a", "fit": "blurpad"}],
+    )
+    tl = build_timeline(spec, BASE, StubProber())
+    c = tl.clips[0]
+    assert c.source_audio == "mix"
+    assert c.source_gain == -3
+    assert c.background == "#0a0a0a"
+    assert c.fit == "blurpad"
+
+
+def test_has_source_audio_flag():
+    plain = build_timeline(make_spec([{"video": "b.mp4"}]), BASE, StubProber())
+    assert plain.has_source_audio is False
+    solo = build_timeline(
+        make_spec([{"video": "b.mp4", "source_audio": "solo"}]), BASE, StubProber()
+    )
+    assert solo.has_source_audio is True
+
+
+def test_source_audio_without_track_rejected():
+    spec = make_spec([{"video": "b.mp4", "source_audio": "solo"}])
+    with pytest.raises(SpecError, match="no audio track"):
+        build_timeline(spec, BASE, StubProber(has_audio=False))

@@ -71,6 +71,112 @@ def test_style_merging():
     assert style.position == "top"
 
 
+# ---- M2: source_audio ------------------------------------------------------
+
+def test_source_audio_modes_accepted():
+    for mode in ("mute", "solo", "mix"):
+        spec = Spec.model_validate(
+            {"segments": [{"video": "a.mp4", "source_audio": mode}]}
+        )
+        assert spec.segments[0].source_audio == mode
+
+
+def test_source_audio_invalid_rejected():
+    with pytest.raises(Exception):
+        Spec.model_validate({"segments": [{"video": "a.mp4", "source_audio": "loud"}]})
+
+
+def test_source_audio_on_image_rejected():
+    with pytest.raises(Exception, match="only applies to video"):
+        Spec.model_validate(
+            {"segments": [{"image": "a.png", "duration": 2, "source_audio": "solo"}]}
+        )
+
+
+def test_source_gain_parses():
+    spec = Spec.model_validate(
+        {"segments": [{"video": "a.mp4", "source_audio": "mix", "source_gain": -6}]}
+    )
+    assert spec.segments[0].source_gain == -6
+
+
+# ---- M2: fractional text position ------------------------------------------
+
+def test_position_keyword_still_works():
+    for kw in ("top", "center", "bottom"):
+        s = Spec.model_validate(
+            {"segments": [{"image": "a.png", "duration": 2,
+                           "text_style": {"position": kw}}]}
+        )
+        assert s.style_for(s.segments[0]).position == kw
+
+
+def test_position_fraction_accepted():
+    s = Spec.model_validate(
+        {"segments": [{"image": "a.png", "duration": 2,
+                       "text_style": {"position": [0.25, 0.8]}}]}
+    )
+    assert s.style_for(s.segments[0]).position == [0.25, 0.8]
+
+
+def test_position_fraction_out_of_range_rejected():
+    with pytest.raises(Exception, match="between 0 and 1"):
+        Spec.model_validate(
+            {"segments": [{"image": "a.png", "duration": 2,
+                           "text_style": {"position": [0.5, 1.5]}}]}
+        )
+
+
+def test_position_wrong_length_rejected():
+    with pytest.raises(Exception, match=r"\[x, y\]"):
+        Spec.model_validate(
+            {"segments": [{"image": "a.png", "duration": 2,
+                           "text_style": {"position": [0.5]}}]}
+        )
+
+
+# ---- M2: fit + background ---------------------------------------------------
+
+def test_blurpad_fit_accepted():
+    s = Spec.model_validate(
+        {"defaults": {"fit": "blurpad"}, "segments": [{"image": "a.png", "duration": 2}]}
+    )
+    assert s.fit_for(s.segments[0]) == "blurpad"
+
+
+def test_bad_fit_rejected():
+    with pytest.raises(Exception):
+        Spec.model_validate(
+            {"segments": [{"image": "a.png", "duration": 2, "fit": "squish"}]}
+        )
+
+
+def test_background_precedence():
+    s = Spec.model_validate({
+        "defaults": {"background": "white"},
+        "segments": [
+            {"image": "a.png", "duration": 2},
+            {"image": "b.png", "duration": 2, "background": "#101010"},
+        ],
+    })
+    assert s.background_for(s.segments[0]) == "white"
+    assert s.background_for(s.segments[1]) == "#101010"
+
+
+def test_invalid_colour_rejected():
+    with pytest.raises(Exception, match="not a valid colour"):
+        Spec.model_validate(
+            {"segments": [{"image": "a.png", "duration": 2, "background": "notacolour"}]}
+        )
+    with pytest.raises(Exception, match="not a valid colour"):
+        Spec.model_validate(
+            {"segments": [{"image": "a.png", "duration": 2,
+                           "text_style": {"color": "chartroose"}}]}
+        )
+
+
+# ---- loading ----------------------------------------------------------------
+
 def test_load_spec_reports_missing_files(tmp_path):
     path = write_spec(tmp_path, "segments:\n  - image: nope.png\n    duration: 2\n")
     with pytest.raises(SpecError, match="nope.png"):
