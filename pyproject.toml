@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "textvideomaker"
+version = "0.1.0"
+description = "Compose short-form videos from photos, clips, audio, and text via a spec file"
+requires-python = ">=3.11"
+dependencies = [
+    "pydantic>=2",
+    "PyYAML>=6",
+    "Pillow>=10",
+    "imageio-ffmpeg>=0.5",
+]
+
+[project.scripts]
+tvm = "textvideomaker.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["textvideomaker*"]
+
+[tool.setuptools.package-data]
+textvideomaker = ["assets/fonts/*"]

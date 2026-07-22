@@ -1,0 +1,41 @@
+# Example spec — run `python make_assets.py` first, then `tvm render video.yaml`
+output:
+  file: out/first_video.mp4
+  size: 1080x1920
+  fps: 30
+
+defaults:
+  fit: cover
+  text_style:
+    size: 84
+    color: white
+    outline: black
+    position: bottom
+
+audio:
+  file: assets/music.wav
+  start: 0
+  fade_out: 1.5
+
+segments:
+  - image: assets/photo_wide.png
+    duration: 2.5
+    text: "Made from a text file"
+
+  - video: assets/clip.mp4
+    in: 0.5
+    out: 3.5
+    source_audio: mute
+    text: |
+      Clips get trimmed
+      and their audio muted
+    text_style: { position: top }
+
+  - image: assets/photo_tall.png
+    duration: 2.0
+    fit: contain
+    text: "Any size fits"
+    text_style: { color: "#ffd400", position: center }
+
+  - image: assets/photo_square.png
+    duration: 2.0
