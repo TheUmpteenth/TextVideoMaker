@@ -87,3 +87,42 @@ def test_blurpad_video_filter_present(tmp_path):
     )
     assert "gblur=sigma=" in fc
     assert "split=2" in fc
+
+
+def test_no_crossfade_uses_single_concat(tmp_path):
+    _, fc = build({
+        "segments": [
+            {"video": "a.mp4", "in": 0, "out": 2},
+            {"video": "b.mp4", "in": 0, "out": 2},
+        ],
+    }, tmp_path)
+    assert "concat=n=2:v=1:a=0[vout]" in fc
+    assert "xfade" not in fc
+
+
+def test_crossfade_emits_xfade_with_offset(tmp_path):
+    # clip a 0..3, clip b crossfades in over 1s -> starts at 2.0
+    _, fc = build({
+        "segments": [
+            {"video": "a.mp4", "in": 0, "out": 3},
+            {"video": "b.mp4", "in": 0, "out": 3,
+             "transition": {"type": "crossfade", "duration": 1}},
+        ],
+    }, tmp_path)
+    assert "xfade=transition=fade:duration=1.000:offset=2.000" in fc
+    assert "[vout]" in fc
+
+
+def test_mixed_hardcut_and_crossfade(tmp_path):
+    # a|b hard cut, then c crossfades in -> pairwise concat + xfade both present
+    _, fc = build({
+        "segments": [
+            {"video": "a.mp4", "in": 0, "out": 2},
+            {"video": "b.mp4", "in": 0, "out": 2},
+            {"video": "c.mp4", "in": 0, "out": 2,
+             "transition": {"type": "crossfade", "duration": 0.5}},
+        ],
+    }, tmp_path)
+    assert "concat=n=2:v=1:a=0" in fc  # the hard cut a->b
+    assert "xfade=transition=fade" in fc  # the crossfade b->c
+    assert "concat=n=3" not in fc  # not the single-concat path

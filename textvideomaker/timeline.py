@@ -27,6 +27,8 @@ class Clip:
     style: TextStyle
     source_audio: str
     source_gain: float
+    transition_type: str = "none"  # transition INTO this clip from the previous
+    transition_duration: float = 0.0
 
     @property
     def end(self) -> float:
@@ -57,7 +59,8 @@ class Timeline:
 
 def build_timeline(spec: Spec, base_dir: Path, prober: Prober) -> Timeline:
     clips: list[Clip] = []
-    cursor = 0.0
+    end_prev = 0.0  # overlapped end of the previous clip
+    prev_duration = 0.0
     for i, seg in enumerate(spec.segments):
         src = (base_dir / seg.source).resolve()
         if seg.image is not None:
@@ -97,22 +100,39 @@ def build_timeline(spec: Spec, base_dir: Path, prober: Prober) -> Timeline:
                     f"soundtrack, but {seg.source} has no audio track"
                 )
 
+        # Transition INTO this clip (the first clip has nothing to fade from).
+        t_type, t_dur, overlap = "none", 0.0, 0.0
+        if i > 0:
+            tr = spec.transition_for(seg)
+            if tr.type == "crossfade":
+                if tr.duration > prev_duration + _EPS or tr.duration > duration + _EPS:
+                    raise SpecError(
+                        f"segments[{i}]: crossfade of {tr.duration:.2f}s is longer "
+                        f"than the clips it joins (previous {prev_duration:.2f}s, "
+                        f"this {duration:.2f}s)"
+                    )
+                t_type, t_dur, overlap = "crossfade", tr.duration, tr.duration
+
+        start = end_prev - overlap
         clips.append(Clip(
-            index=i, kind=kind, src=src, start=cursor, duration=duration,
+            index=i, kind=kind, src=src, start=start, duration=duration,
             in_offset=in_offset, fit=spec.fit_for(seg),
             background=spec.background_for(seg), text=seg.text,
             style=spec.style_for(seg), source_audio=seg.source_audio,
-            source_gain=seg.source_gain,
+            source_gain=seg.source_gain, transition_type=t_type,
+            transition_duration=t_dur,
         ))
-        cursor += duration
+        end_prev = start + duration
+        prev_duration = duration
 
+    total = end_prev
     audio = None
     if spec.audio is not None:
         audio = ResolvedAudio(
             src=(base_dir / spec.audio.file).resolve(),
             start=spec.audio.start,
             gain=spec.audio.gain,
-            fade_out=min(spec.audio.fade_out, cursor),
+            fade_out=min(spec.audio.fade_out, total),
             if_short=spec.audio.if_short,
         )
-    return Timeline(clips=clips, audio=audio, total=cursor)
+    return Timeline(clips=clips, audio=audio, total=total)

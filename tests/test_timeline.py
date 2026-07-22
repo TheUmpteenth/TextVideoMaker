@@ -101,3 +101,53 @@ def test_source_audio_without_track_rejected():
     spec = make_spec([{"video": "b.mp4", "source_audio": "solo"}])
     with pytest.raises(SpecError, match="no audio track"):
         build_timeline(spec, BASE, StubProber(has_audio=False))
+
+
+# ---- crossfade transitions --------------------------------------------------
+
+def test_crossfade_overlaps_and_shrinks_total():
+    spec = make_spec([
+        {"image": "a.png", "duration": 3},
+        {"image": "b.png", "duration": 3,
+         "transition": {"type": "crossfade", "duration": 1}},
+        {"image": "c.png", "duration": 3,
+         "transition": {"type": "crossfade", "duration": 1}},
+    ])
+    tl = build_timeline(spec, BASE, StubProber())
+    # each crossfade pulls the next clip 1s earlier
+    assert [c.start for c in tl.clips] == [0.0, 2.0, 4.0]
+    # 9s of footage minus 2 x 1s overlap
+    assert tl.total == 7.0
+    assert tl.clips[1].transition_type == "crossfade"
+    assert tl.clips[1].transition_duration == 1
+
+
+def test_first_segment_transition_ignored():
+    spec = make_spec(
+        [{"image": "a.png", "duration": 2}, {"image": "b.png", "duration": 2}],
+        defaults={"transition": "crossfade"},
+    )
+    tl = build_timeline(spec, BASE, StubProber())
+    assert tl.clips[0].transition_type == "none"   # nothing to fade from
+    assert tl.clips[0].start == 0.0
+    assert tl.clips[1].transition_type == "crossfade"
+
+
+def test_crossfade_too_long_rejected():
+    spec = make_spec([
+        {"image": "a.png", "duration": 2},
+        {"image": "b.png", "duration": 1,
+         "transition": {"type": "crossfade", "duration": 1.5}},
+    ])
+    with pytest.raises(SpecError, match="longer than the clips"):
+        build_timeline(spec, BASE, StubProber())
+
+
+def test_hard_cut_default_no_overlap():
+    spec = make_spec([
+        {"image": "a.png", "duration": 2},
+        {"image": "b.png", "duration": 2},
+    ])
+    tl = build_timeline(spec, BASE, StubProber())
+    assert [c.start for c in tl.clips] == [0.0, 2.0]
+    assert tl.total == 4.0

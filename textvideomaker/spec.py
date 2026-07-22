@@ -120,11 +120,37 @@ class TextStyleOverride(BaseModel):
         return {f: getattr(self, f) for f in self.model_fields_set if f in _STYLE_FIELDS}
 
 
+class Transition(BaseModel):
+    """How a segment enters from the previous one.
+
+    `type` is deliberately a small enum so new kinds (slide, wipe, fade-to-black)
+    can be added later without changing the shape of a spec. A bare string like
+    `transition: crossfade` is accepted as shorthand for `{type: crossfade}`.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["none", "crossfade"] = "none"
+    duration: float = 0.5  # seconds of overlap (ignored when type is none)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _accept_shorthand(cls, v):
+        return {"type": v} if isinstance(v, str) else v
+
+    @model_validator(mode="after")
+    def _check(self) -> "Transition":
+        if self.type != "none" and self.duration <= 0:
+            raise ValueError("transition duration must be positive")
+        return self
+
+
 class Defaults(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     fit: FitMode = "cover"
     background: str = "black"  # for contain bars and transparent-PNG areas
+    transition: Transition = Field(default_factory=Transition)
     text_style: TextStyle = Field(default_factory=TextStyle)
 
     @field_validator("background")
@@ -172,6 +198,7 @@ class Segment(BaseModel):
     out: Optional[float] = None  # videos only
     fit: Optional[FitMode] = None
     background: Optional[str] = None
+    transition: Optional[Transition] = None  # how this segment enters
     source_audio: Literal["mute", "solo", "mix"] = "mute"
     source_gain: float = 0.0  # dB, applied to the clip's own audio (solo/mix)
     text: Optional[str] = None
@@ -230,6 +257,9 @@ class Spec(BaseModel):
 
     def background_for(self, segment: Segment) -> str:
         return segment.background or self.defaults.background
+
+    def transition_for(self, segment: Segment) -> Transition:
+        return segment.transition or self.defaults.transition
 
 
 def _format_validation_error(e: ValidationError, prefix: str = "") -> str:

@@ -175,6 +175,62 @@ def test_invalid_colour_rejected():
         )
 
 
+# ---- M2: transitions --------------------------------------------------------
+
+def test_transition_default_none():
+    s = Spec.model_validate({"segments": [{"image": "a.png", "duration": 2}]})
+    assert s.transition_for(s.segments[0]).type == "none"
+
+
+def test_transition_string_shorthand():
+    s = Spec.model_validate({
+        "defaults": {"transition": "crossfade"},
+        "segments": [{"image": "a.png", "duration": 2}],
+    })
+    tr = s.defaults.transition
+    assert tr.type == "crossfade"
+    assert tr.duration == 0.5  # default
+
+
+def test_transition_mapping_with_duration():
+    s = Spec.model_validate({
+        "segments": [
+            {"image": "a.png", "duration": 2},
+            {"image": "b.png", "duration": 2,
+             "transition": {"type": "crossfade", "duration": 0.75}},
+        ],
+    })
+    tr = s.transition_for(s.segments[1])
+    assert tr.type == "crossfade" and tr.duration == 0.75
+
+
+def test_transition_override_beats_default():
+    s = Spec.model_validate({
+        "defaults": {"transition": "crossfade"},
+        "segments": [
+            {"image": "a.png", "duration": 2},
+            {"image": "b.png", "duration": 2, "transition": "none"},
+        ],
+    })
+    assert s.transition_for(s.segments[1]).type == "none"
+
+
+def test_transition_invalid_type_rejected():
+    with pytest.raises(Exception):
+        Spec.model_validate({
+            "segments": [{"image": "a.png", "duration": 2,
+                          "transition": {"type": "swirl"}}],
+        })
+
+
+def test_transition_bad_duration_rejected():
+    with pytest.raises(Exception, match="duration must be positive"):
+        Spec.model_validate({
+            "segments": [{"image": "a.png", "duration": 2,
+                          "transition": {"type": "crossfade", "duration": 0}}],
+        })
+
+
 # ---- loading ----------------------------------------------------------------
 
 def test_load_spec_reports_missing_files(tmp_path):

@@ -14,6 +14,10 @@ AUDIO_RATE = 48000
 _ALOOP_MAX = 2147483647  # aloop 'size' cap (samples)
 _STEREO = f"aformat=sample_rates={AUDIO_RATE}:channel_layouts=stereo"
 
+# Our transition names -> ffmpeg xfade transition names. Extend this (and the
+# Transition enum in spec.py) to add slides, wipes, fade-to-black, etc.
+TRANSITION_MAP = {"crossfade": "fade"}
+
 
 def build_render_command(
     timeline: Timeline,
@@ -56,7 +60,7 @@ def build_render_command(
                 "-loop", "1", "-framerate", str(fps),
                 "-t", f"{clip.duration:.3f}", "-i", str(still),
             )
-            filters.append(f"[{idx}:v]fps={fps},setsar=1,format=yuv420p[{label}]")
+            filters.append(f"[{idx}:v]fps={fps},setsar=1,format=yuv420p,settb=AVTB[{label}]")
         else:
             in_opts: list[str] = []
             if clip.in_offset > 0:
@@ -75,15 +79,37 @@ def build_render_command(
                 txt_idx = add_input("-i", str(png))
                 filters.append(f"[{fit_out}]fps={fps},setsar=1[vpre{clip.index}]")
                 filters.append(
-                    f"[vpre{clip.index}][{txt_idx}:v]overlay=0:0,format=yuv420p[{label}]"
+                    f"[vpre{clip.index}][{txt_idx}:v]overlay=0:0,format=yuv420p,"
+                    f"settb=AVTB[{label}]"
                 )
             else:
-                filters.append(f"[{fit_out}]fps={fps},setsar=1,format=yuv420p[{label}]")
+                filters.append(
+                    f"[{fit_out}]fps={fps},setsar=1,format=yuv420p,settb=AVTB[{label}]"
+                )
         seg_labels.append(f"[{label}]")
 
-    filters.append(
-        "".join(seg_labels) + f"concat=n={len(seg_labels)}:v=1:a=0[vout]"
-    )
+    # Assemble the segments into [vout]. With no crossfades this is a single
+    # concat; otherwise we compose pairwise so hard cuts (concat) and crossfades
+    # (xfade, overlapping by the transition duration) can be mixed freely.
+    clips = timeline.clips
+    if any(c.transition_type == "crossfade" for c in clips):
+        acc = f"v{clips[0].index}"
+        for k in range(1, len(clips)):
+            c = clips[k]
+            out = "vout" if k == len(clips) - 1 else f"vt{c.index}"
+            if c.transition_type == "crossfade":
+                xname = TRANSITION_MAP.get(c.transition_type, "fade")
+                filters.append(
+                    f"[{acc}][v{c.index}]xfade=transition={xname}:"
+                    f"duration={c.transition_duration:.3f}:offset={c.start:.3f}[{out}]"
+                )
+            else:
+                filters.append(f"[{acc}][v{c.index}]concat=n=2:v=1:a=0[{out}]")
+            acc = out
+    else:
+        filters.append(
+            "".join(seg_labels) + f"concat=n={len(seg_labels)}:v=1:a=0[vout]"
+        )
 
     # ---- audio graph ---------------------------------------------------------
     # Background soundtrack (optional) plus each video segment's own audio when

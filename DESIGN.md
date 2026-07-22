@@ -61,6 +61,7 @@ output:
 defaults:                # optional; applies to every segment unless overridden
   fit: cover             # cover = fill frame & crop | contain = letterbox | blurpad = blurred copy fills bars
   background: black      # colour for contain bars and transparent-PNG areas (name/#rrggbb/#rrggbbaa)
+  transition: none       # none | crossfade — or a mapping { type: crossfade, duration: 0.6 }
   text_style:
     font: null           # null = bundled Montserrat; or a path to a .ttf
     size: 72             # px at 1080-wide reference, scaled for other sizes
@@ -96,7 +97,14 @@ segments:                # played in order; total video length = sum of segment 
     duration: 2.0        # no text on this one
     fit: blurpad
     background: "#fefeeb"  # per-segment override of the default background
+    transition: { type: crossfade, duration: 0.5 }  # dissolve in from the previous segment
 ```
+
+A `transition:` on a segment describes how it *enters* from the previous one (the first
+segment's is ignored). A crossfade of duration D overlaps the two segments by D, so the
+final video is shorter than the sum of segment lengths; D must not exceed either
+neighbouring segment. Set `transition: none` on a segment to force a hard cut even when
+the default is a crossfade.
 
 Notes on the model:
 
@@ -175,15 +183,19 @@ layout math / timeline (generated fixture media, no real photos in the repo).
 Out (deliberately): `source_audio: solo|mix`, `blurpad`, transitions, fractional text
 positioning, auto mode.
 
-**M2 — control** *(mostly DONE)*
-Done and verified on real media: `source_audio: solo|mix` with per-segment
+**M2 — control** *(DONE)*
+All done and verified on real media: `source_audio: solo|mix` with per-segment
 `source_gain` (the founding "toggle the clip's audio" requirement — solo ducks the
 soundtrack for its window, mix layers over it); `blurpad` fit; `background:` colour for
 `contain` bars and transparent-PNG areas (fixes the cream-logo-on-black finding);
-position-as-fraction text placement (keywords retained); `audio.if_short: loop|silence`.
-Remaining: **crossfade transition** — deferred as its own step because it reworks the
-timeline (segments overlap, so total length shrinks and the audio graph must follow the
-overlapped starts); the rest of M2 is additive and shipped first.
+position-as-fraction text placement (keywords retained); `audio.if_short: loop|silence`;
+and **crossfade transitions**. Transitions are modelled as an extensible `transition:`
+(type + duration) — `crossfade` maps to ffmpeg `xfade`, and the enum + `TRANSITION_MAP`
+are set up so slide/wipe/fade-to-black are later additions, not a redesign. Crossfades
+overlap adjacent segments (total length shrinks), hard cuts and crossfades mix freely in
+one video chain, and the audio follows the overlapped starts. *Known follow-up:* audio
+across a crossfade currently sums during the overlap rather than doing an equal-power
+`acrossfade` — fine for a soundtrack, worth revisiting when two `solo` clips abut.
 
 **M3 — generator: many specs from a pile of assets** *(top priority — the "don't
 write YAML by hand" tool)*
