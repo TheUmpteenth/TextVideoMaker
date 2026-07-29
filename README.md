@@ -61,6 +61,19 @@ assets:
 Fields: `exclude`, `role: content|card`, `audio: require|never|optional`, video
 `usable`/`avoid` time ranges, `whole: true`, and `subject:` tags.
 
+### Reviewing a batch
+
+Draft-render a whole folder of specs and build a contact sheet to triage them:
+
+```powershell
+.venv\Scripts\tvm review C:\path\to\assets\generated
+```
+
+This renders each spec as a fast low-res draft (skipping ones already up to date; `--force`
+to redo) and writes an `index.html` in the folder that embeds every draft in a grid with
+its hook and duration. Open it in a browser to watch the whole batch on one page and keep
+the ones you like.
+
 ## Spec format
 
 See [examples/first_video/video.yaml](examples/first_video/video.yaml) for a

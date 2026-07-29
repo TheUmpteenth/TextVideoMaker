@@ -14,6 +14,14 @@ from . import __version__
 from .ffmpeg_build import build_render_command, draft_dimensions
 from .generate import Asset, generate_specs, read_hooks, scan_assets, write_specs
 from .probe import Prober
+from .review import (
+    build_index_html,
+    collect_spec_files,
+    draft_output_path,
+    is_up_to_date,
+    make_item,
+    render_draft,
+)
 from .runner import RenderError, find_ffmpeg, find_ffprobe
 from .spec import SpecError, load_spec
 from .timeline import Timeline, build_timeline
@@ -134,6 +142,44 @@ def cmd_generate(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_review(args: argparse.Namespace) -> int:
+    spec_dir = Path(args.dir).resolve()
+    if not spec_dir.is_dir():
+        raise SpecError(f"Not a folder: {spec_dir}")
+    specs = collect_spec_files(spec_dir, args.pattern)
+    if not specs:
+        raise SpecError(f"No spec files found in {spec_dir}")
+
+    ffmpeg = find_ffmpeg()
+    prober = Prober(ffmpeg, find_ffprobe())
+
+    items = []
+    rendered = skipped = 0
+    for sp in specs:
+        try:
+            spec, base_dir = load_spec(sp)
+        except SpecError as e:
+            print(f"  skip {sp.name}: {str(e).splitlines()[0]}")
+            continue
+        tl = build_timeline(spec, base_dir, prober)
+        draft = draft_output_path(spec, base_dir)
+        if args.force or not is_up_to_date(draft, sp):
+            print(f"  rendering {sp.name} ...")
+            render_draft(spec, base_dir, tl, ffmpeg, draft)
+            rendered += 1
+        else:
+            skipped += 1
+        items.append(make_item(sp, spec, tl, draft, spec_dir))
+
+    if not items:
+        raise SpecError("No valid specs to review")
+    index = spec_dir / "index.html"
+    index.write_text(build_index_html(items, spec_dir.name), encoding="utf-8")
+    print(f"\nReviewed {len(items)} spec(s): {rendered} rendered, {skipped} up to date")
+    print(f"Open: {index}")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     # Windows consoles default to a legacy codepage; make our output UTF-8 so
     # captions with characters like "·" print correctly in the timeline view.
@@ -176,6 +222,15 @@ def main(argv: list[str] | None = None) -> int:
     p_gen.add_argument("--fps", type=int, default=30)
     p_gen.add_argument("-o", "--out", help="Output dir for specs (default <folder>/generated)")
     p_gen.set_defaults(func=cmd_generate)
+
+    p_rev = sub.add_parser("review",
+                           help="Draft-render a folder of specs and build a contact sheet")
+    p_rev.add_argument("dir", help="Folder of specs (e.g. the generated/ folder)")
+    p_rev.add_argument("--force", action="store_true",
+                       help="Re-render drafts even if they look up to date")
+    p_rev.add_argument("--pattern", default=None,
+                       help="Glob for spec files (default: all .yaml/.yml/.json)")
+    p_rev.set_defaults(func=cmd_review)
 
     args = parser.parse_args(argv)
     try:

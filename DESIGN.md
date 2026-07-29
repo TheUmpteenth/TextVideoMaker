@@ -224,9 +224,11 @@ opposed to spreading; and the `subject` field is deliberately the same one M4 ca
 auto-populate from near-duplicate clustering / face grouping, so manual tags now become
 automatic later.
 
-*Also pending:* a review workflow — batch `--draft` render + a generated contact-sheet of
-thumbnails so tens of cuts can be triaged fast. (Today the CLI prints a batch draft-render
-command.)
+*Review workflow — DONE.* `tvm review <dir>` draft-renders every spec in a folder
+(skipping ones already up to date, `--force` to redo) and writes a self-contained
+`index.html` that embeds all the drafts in a grid with filename/hook/duration captions —
+one page to watch the whole batch instead of opening files one by one. It's a plain local
+file (references the draft mp4s by relative path), not an artifact.
 
 **M4 — media analysis: cull to the "good shots"**
 `tvm rank <asset_folder>` (and a `--rank` flag the generator can consume). Two tiers:
