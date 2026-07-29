@@ -30,6 +30,20 @@ cd examples\first_video
 ..\..\.venv\Scripts\tvm render video.yaml
 ```
 
+## Generate specs from a folder
+
+Instead of hand-writing specs, point `tvm generate` at a folder of photos/videos/audio
+and a text file of hooks (one per line) to emit a batch of ready-to-render specs:
+
+```powershell
+.venv\Scripts\tvm generate C:\path\to\assets --texts hooks.txt --count 20 --seed 7
+```
+
+It writes `gen_01.yaml … gen_20.yaml` into `<folder>\generated\`, each a hook shot →
+content shots/clips → logo card with crossfades, a random track per video, and no asset
+reused within a video. `--seed` makes a batch reproducible; change it to reshuffle. Then
+render them (or `--draft` for quick previews) and keep the ones you like.
+
 ## Spec format
 
 See [examples/first_video/video.yaml](examples/first_video/video.yaml) for a

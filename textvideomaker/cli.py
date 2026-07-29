@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import random
 import subprocess
 import sys
 import tempfile
@@ -11,6 +12,7 @@ from pathlib import Path
 
 from . import __version__
 from .ffmpeg_build import build_render_command, draft_dimensions
+from .generate import Asset, generate_specs, read_hooks, scan_assets, write_specs
 from .probe import Prober
 from .runner import RenderError, find_ffmpeg, find_ffprobe
 from .spec import SpecError, load_spec
@@ -87,6 +89,51 @@ def cmd_render(args: argparse.Namespace) -> int:
     return 0
 
 
+def _music_pool(music_arg: str | None, prober: Prober) -> list[Asset]:
+    """Resolve --music to a list of audio Assets (a file, a folder, or nothing)."""
+    if not music_arg:
+        return []
+    path = Path(music_arg)
+    if path.is_file():
+        info = prober.probe(path)
+        return [Asset(path.resolve(), "audio", duration=info.duration)]
+    if path.is_dir():
+        _, _, audios = scan_assets(path, prober)
+        return audios
+    raise SpecError(f"--music path not found: {music_arg}")
+
+
+def cmd_generate(args: argparse.Namespace) -> int:
+    folder = Path(args.folder).resolve()
+    if not folder.is_dir():
+        raise SpecError(f"Not a folder: {folder}")
+    out_dir = Path(args.out).resolve() if args.out else folder / "generated"
+
+    ffmpeg = find_ffmpeg()
+    prober = Prober(ffmpeg, find_ffprobe())
+
+    hooks = read_hooks(Path(args.texts) if args.texts else None)
+    if not hooks:
+        print("warning: no --texts hooks provided; videos will have no hook text")
+    music_pool = _music_pool(args.music, prober)
+    seed = args.seed if args.seed is not None else random.randrange(1 << 30)
+
+    specs = generate_specs(
+        folder, hooks, count=args.count, size=args.size, length=args.length,
+        fps=args.fps, cta=args.cta, seed=seed, music_pool=music_pool,
+        out_dir=out_dir, prober=prober,
+    )
+    written = write_specs(specs, out_dir)
+
+    print(f"Generated {len(written)} specs in {out_dir}  (seed {seed})")
+    for path in written:
+        print(f"  {path.name}")
+    rel = out_dir
+    print(f"\nRender them all (draft):")
+    print(f'  for %f in ("{rel}\\gen_*.yaml") do tvm render "%f" --draft')
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     # Windows consoles default to a legacy codepage; make our output UTF-8 so
     # captions with characters like "·" print correctly in the timeline view.
@@ -110,6 +157,25 @@ def main(argv: list[str] | None = None) -> int:
     p_render.add_argument("--dry-run", action="store_true",
                           help="Show the resolved timeline and ffmpeg command only")
     p_render.set_defaults(func=cmd_render)
+
+    p_gen = sub.add_parser("generate", help="Generate specs from a folder of assets + hooks")
+    p_gen.add_argument("folder", help="Folder of photos/videos/audio to draw from")
+    p_gen.add_argument("-t", "--texts", help="Text file of hooks, one per line")
+    p_gen.add_argument("-n", "--count", type=int, default=10,
+                       help="How many specs to generate (default 10)")
+    p_gen.add_argument("--size", default="vertical",
+                       help="vertical | square | wide | WxH (default vertical)")
+    p_gen.add_argument("-l", "--length", type=float, default=12.0,
+                       help="Target video length in seconds (default 12)")
+    p_gen.add_argument("--seed", type=int, default=None,
+                       help="Random seed for a reproducible batch (default: random)")
+    p_gen.add_argument("--cta", default="@bruachband",
+                       help="Call-to-action text for the closing logo card")
+    p_gen.add_argument("--music", default=None,
+                       help="A track file or folder of tracks (default: audio in the folder)")
+    p_gen.add_argument("--fps", type=int, default=30)
+    p_gen.add_argument("-o", "--out", help="Output dir for specs (default <folder>/generated)")
+    p_gen.set_defaults(func=cmd_generate)
 
     args = parser.parse_args(argv)
     try:

@@ -197,16 +197,31 @@ one video chain, and the audio follows the overlapped starts. *Known follow-up:*
 across a crossfade currently sums during the overlap rather than doing an equal-power
 `acrossfade` — fine for a soundtrack, worth revisiting when two `solo` clips abut.
 
-**M3 — generator: many specs from a pile of assets** *(top priority — the "don't
-write YAML by hand" tool)*
-`tvm generate <asset_folder> --texts texts.txt --count 20 [--seed N] [--length 20]
-[--size vertical] [--audio track.mp3]`: probe a folder, sequence assets to a target
-length, attach text strings, and emit *N* spec variants (`gen_01.yaml` … `gen_NN.yaml`)
-you can hand-tweak then render. A fixed `--seed` makes a batch reproducible; changing it
-reshuffles. Cheap to build because it only *emits specs* — the renderer is untouched.
-Pairs with a review workflow: `tvm render --draft` over a batch plus a generated
-contact-sheet of thumbnails, so tens of cuts can be triaged fast. Ships useful with dumb
-shuffle; gets much better once M4 ranks the asset pool.
+**M3 — generator: many specs from a pile of assets**
+
+*Core — DONE.* `tvm generate <folder> --texts hooks.txt --count N [--seed S]
+[--length L] [--size vertical] [--music FILE|DIR] [--cta TEXT] [--out DIR]`: recursively
+scans a folder (skipping `out/`/`generated/` so rendered mp4s aren't mistaken for source),
+buckets images/videos/audio, and emits *N* schema-valid specs (`gen_01.yaml` …) built
+from a template — hook card/shot → content shots/clips (videos randomly trimmed) → cream
+logo CTA card, with crossfades. One hook per video (cycled), a per-video random track +
+start offset, a `--seed` for reproducible batches, no asset reused within a video, and a
+length target that accounts for crossfade overlap. Each emitted spec is self-checked
+against the schema. Logo images are detected by filename and used only as cards.
+
+*Next — the metadata layer (the David idea).* An optional `assets.yaml` in the folder,
+keyed by filename or glob, giving the generator hints it can't infer:
+- video `usable`/`avoid` time ranges and `whole: true`; `audio: require|never|optional`;
+- image/clip `subject:` tags (Davie/Pheely/Group/logo…) to deliberately spread or cluster
+  the same subject; `role: content|card`; `exclude: true`.
+Build order: (2) honour the cheap, high-value fields first — `exclude`, `role`,
+`audio`, and video `usable`/`avoid`; (3) subject tags + grouping logic last. The
+`subject` field is deliberately the same one M4 can auto-populate from near-duplicate
+clustering / face grouping, so manual tags now become automatic later.
+
+*Also pending:* a review workflow — batch `--draft` render + a generated contact-sheet of
+thumbnails so tens of cuts can be triaged fast. (Today the CLI prints a batch draft-render
+command.)
 
 **M4 — media analysis: cull to the "good shots"**
 `tvm rank <asset_folder>` (and a `--rank` flag the generator can consume). Two tiers:
