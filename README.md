@@ -44,6 +44,23 @@ content shots/clips → logo card with crossfades, a random track per video, and
 reused within a video. `--seed` makes a batch reproducible; change it to reshuffle. Then
 render them (or `--draft` for quick previews) and keep the ones you like.
 
+### Guiding the generator with `assets.yaml`
+
+Drop an optional `assets.yaml` in the folder to give the generator hints it can't infer.
+Keys are filenames or globs; matching entries merge in order:
+
+```yaml
+assets:
+  "clip_with_captions*.mp4": { usable: [[18, 27]], audio: never }  # only trim this window
+  "loud_singalong*.mp4": { audio: require }      # mix this clip's own audio in
+  "*Logo*": { role: card }                       # bookend card, never a content shot
+  "blurry*.jpg": { exclude: true }               # never use
+  "IMG_528*.JPEG": { subject: singer }           # keep same-subject shots off each other
+```
+
+Fields: `exclude`, `role: content|card`, `audio: require|never|optional`, video
+`usable`/`avoid` time ranges, `whole: true`, and `subject:` tags.
+
 ## Spec format
 
 See [examples/first_video/video.yaml](examples/first_video/video.yaml) for a

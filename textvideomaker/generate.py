@@ -10,12 +10,13 @@ from __future__ import annotations
 
 import os
 import random
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
 import yaml
 
+from .assetmeta import AssetMeta, load_asset_meta
 from .probe import Prober
 from .spec import Spec
 
@@ -41,12 +42,31 @@ class Asset:
     kind: str  # "image" | "video" | "audio"
     duration: Optional[float] = None
     is_logo: bool = False
+    meta: AssetMeta = field(default_factory=AssetMeta)
+
+    @property
+    def excluded(self) -> bool:
+        return self.meta.exclude
+
+    @property
+    def subject(self) -> Optional[str]:
+        return self.meta.subject
+
+    @property
+    def is_card(self) -> bool:
+        """A card (logo/bookend) rather than a content shot."""
+        if self.meta.role == "card":
+            return True
+        if self.meta.role == "content":
+            return False
+        return self.is_logo
 
 
 def scan_assets(folder: Path, prober: Prober,
                 extra_skip: set[str] | None = None) -> tuple[list[Asset], list[Asset], list[Asset]]:
-    """Return (images, videos, audios) found under folder, minus logo cards."""
+    """Return (images, videos, audios) found under folder, with metadata attached."""
     folder = Path(folder)
+    resolver = load_asset_meta(folder)
     skip = set(_SKIP_DIRS) | (extra_skip or set())
     images: list[Asset] = []
     videos: list[Asset] = []
@@ -54,18 +74,19 @@ def scan_assets(folder: Path, prober: Prober,
     for p in sorted(folder.rglob("*")):
         if not p.is_file():
             continue
-        rel_parts = p.relative_to(folder).parts[:-1]
-        if any(part in skip for part in rel_parts):
+        rel = p.relative_to(folder)
+        if any(part in skip for part in rel.parts[:-1]):
             continue
         ext = p.suffix.lower()
+        meta = resolver.for_asset(str(rel), p.name)
         if ext in IMAGE_EXT:
-            images.append(Asset(p, "image", is_logo="logo" in p.stem.lower()))
+            images.append(Asset(p, "image", is_logo="logo" in p.stem.lower(), meta=meta))
         elif ext in VIDEO_EXT:
             info = prober.probe(p)
-            videos.append(Asset(p, "video", duration=info.duration))
+            videos.append(Asset(p, "video", duration=info.duration, meta=meta))
         elif ext in AUDIO_EXT:
             info = prober.probe(p)
-            audios.append(Asset(p, "audio", duration=info.duration))
+            audios.append(Asset(p, "audio", duration=info.duration, meta=meta))
     return images, videos, audios
 
 
@@ -91,21 +112,86 @@ def _hook_size(text: str) -> int:
     return 44
 
 
+def _subtract_avoid(windows: list[tuple[float, float]],
+                    avoid: list[list[float]]) -> list[tuple[float, float]]:
+    """Cut the avoid ranges out of each window, returning the free sub-intervals."""
+    result: list[tuple[float, float]] = []
+    for ws, we in windows:
+        pieces = [(ws, we)]
+        for a_s, a_e in avoid:
+            nxt: list[tuple[float, float]] = []
+            for s, e in pieces:
+                if a_e <= s or a_s >= e:
+                    nxt.append((s, e))
+                    continue
+                if s < a_s:
+                    nxt.append((s, min(a_s, e)))
+                if a_e < e:
+                    nxt.append((max(a_e, s), e))
+            pieces = nxt
+        result.extend(pieces)
+    return [(s, e) for s, e in result if e - s > 0]
+
+
 def _video_trim(asset: Asset, want: float, rng: random.Random):
-    """Return (in, out, length). in/out None means 'use the whole clip'."""
+    """Return (in, out, length). in/out None means 'use the whole clip'.
+
+    Honours the asset's metadata: `whole` uses the entire clip, `usable` limits
+    trims to those windows, `avoid` carves ranges out.
+    """
     dur = asset.duration or want
-    seglen = min(want, dur)
-    if dur - seglen <= 0.05:
+    meta = asset.meta
+    if meta.whole:
         return None, None, round(dur, 2)
-    start = round(rng.uniform(0, dur - seglen), 2)
-    return start, round(start + seglen, 2), round(seglen, 2)
+
+    if meta.usable:
+        windows = [(max(0.0, s), min(dur, e)) for s, e in meta.usable if s < dur and e > s]
+    else:
+        windows = [(0.0, dur)]
+    if meta.avoid:
+        windows = _subtract_avoid(windows, meta.avoid)
+    windows = [w for w in windows if w[1] - w[0] >= min(want, 0.5)]
+    if not windows:
+        return None, None, round(dur, 2)  # nothing usable long enough -> whole clip
+
+    ws, we = rng.choice(windows)
+    seglen = min(want, we - ws)
+    if (we - ws) - seglen <= 0.05:
+        start = ws
+    else:
+        start = rng.uniform(ws, we - seglen)
+    return round(start, 2), round(start + seglen, 2), round(seglen, 2)
+
+
+def _source_audio(asset: Asset) -> tuple[str, float]:
+    """(source_audio, source_gain) from the asset's audio preference."""
+    if asset.meta.audio == "require":
+        return "mix", -3.0
+    return "mute", 0.0  # never / optional / unset -> keep the soundtrack clean
+
+
+def _spread_by_subject(assets: list[Asset]) -> list[Asset]:
+    """Reorder so tagged subjects don't sit back-to-back (untagged shots ignored)."""
+    remaining = list(assets)
+    ordered: list[Asset] = []
+    last: Optional[str] = None
+    while remaining:
+        idx = next((i for i, a in enumerate(remaining)
+                    if a.subject is None or a.subject != last), 0)
+        pick = remaining.pop(idx)
+        ordered.append(pick)
+        last = pick.subject
+    return ordered
 
 
 def _content_segment(asset: Asset, out_dir: Path, rng: random.Random) -> tuple[dict, float]:
     if asset.kind == "image":
         return {"image": _rel(asset.path, out_dir), "duration": IMAGE_DUR}, IMAGE_DUR
     in_, out, length = _video_trim(asset, VIDEO_WANT, rng)
-    seg: dict = {"video": _rel(asset.path, out_dir), "source_audio": "mute"}
+    src_audio, gain = _source_audio(asset)
+    seg: dict = {"video": _rel(asset.path, out_dir), "source_audio": src_audio}
+    if gain:
+        seg["source_gain"] = gain
     if in_ is not None:
         seg["in"], seg["out"] = in_, out
     return seg, length
@@ -134,13 +220,15 @@ def generate_specs(
 ) -> list[tuple[str, dict]]:
     images, videos, audios = scan_assets(folder, prober,
                                          extra_skip={out_dir.name})
-    logos = [a for a in images if a.is_logo]
-    content_images = [a for a in images if not a.is_logo]
+    images = [a for a in images if not a.excluded]
+    videos = [v for v in videos if not v.excluded]
+    logos = [a for a in images if a.is_card]
+    content_images = [a for a in images if not a.is_card]
     content_videos = [v for v in videos if (v.duration or 0) >= MIN_VIDEO_LEN]
     content = content_images + content_videos
     if not content:
         raise ValueError(f"No usable images or videos found under {folder}")
-    tracks = music_pool or audios
+    tracks = [t for t in (music_pool or audios) if not t.excluded]
 
     specs: list[tuple[str, dict]] = []
     for i in range(count):
@@ -149,6 +237,7 @@ def generate_specs(
 
         pool = content[:]
         rng.shuffle(pool)
+        pool = _spread_by_subject(pool)  # keep same-subject shots off each other
         hook_asset = pool[0]
         has_card = bool(logos)
 
@@ -163,7 +252,10 @@ def generate_specs(
             pos = [0.5, 0.5]
         else:
             in_, out, hook_dur = _video_trim(hook_asset, VIDEO_WANT, rng)
-            hseg = {"video": _rel(hook_asset.path, out_dir), "source_audio": "mute"}
+            src_audio, gain = _source_audio(hook_asset)
+            hseg = {"video": _rel(hook_asset.path, out_dir), "source_audio": src_audio}
+            if gain:
+                hseg["source_gain"] = gain
             if in_ is not None:
                 hseg["in"], hseg["out"] = in_, out
             pos = "top"

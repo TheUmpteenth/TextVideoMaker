@@ -209,15 +209,20 @@ start offset, a `--seed` for reproducible batches, no asset reused within a vide
 length target that accounts for crossfade overlap. Each emitted spec is self-checked
 against the schema. Logo images are detected by filename and used only as cards.
 
-*Next — the metadata layer (the David idea).* An optional `assets.yaml` in the folder,
-keyed by filename or glob, giving the generator hints it can't infer:
-- video `usable`/`avoid` time ranges and `whole: true`; `audio: require|never|optional`;
-- image/clip `subject:` tags (Davie/Pheely/Group/logo…) to deliberately spread or cluster
-  the same subject; `role: content|card`; `exclude: true`.
-Build order: (2) honour the cheap, high-value fields first — `exclude`, `role`,
-`audio`, and video `usable`/`avoid`; (3) subject tags + grouping logic last. The
-`subject` field is deliberately the same one M4 can auto-populate from near-duplicate
-clustering / face grouping, so manual tags now become automatic later.
+*Metadata layer — DONE (step 2 + subject spread).* An optional `assets.yaml` in the
+folder, keyed by filename or glob (matching entries merge in file order), gives the
+generator hints it can't infer. Honoured today: `exclude: true` (drop the asset),
+`role: content|card` (a card is a bookend, never a content shot; overrides filename-based
+logo detection), `audio: require|never|optional` (require → the clip's own audio is mixed
+in at −3 dB; else muted), video `usable`/`avoid` time ranges and `whole: true` (constrain
+or disable trimming — this is what keeps trims of the caption-burned Game Fair clip inside
+its clean window), and `subject:` tags used to keep the same subject off back-to-back
+shots (`_spread_by_subject`). Every entry is validated with a clear per-asset error.
+
+*Still to do on metadata:* deliberate *grouping* (a themed video of one subject) as
+opposed to spreading; and the `subject` field is deliberately the same one M4 can
+auto-populate from near-duplicate clustering / face grouping, so manual tags now become
+automatic later.
 
 *Also pending:* a review workflow — batch `--draft` render + a generated contact-sheet of
 thumbnails so tens of cuts can be triaged fast. (Today the CLI prints a batch draft-render

@@ -1,10 +1,19 @@
 """Generator core: hook parsing, length math, and valid spec synthesis."""
 
+import random
+from pathlib import Path
+
 import pytest
 from PIL import Image
 
+from textvideomaker.assetmeta import AssetMeta
 from textvideomaker.generate import (
+    Asset,
     _projected_total,
+    _source_audio,
+    _spread_by_subject,
+    _subtract_avoid,
+    _video_trim,
     generate_specs,
     read_hooks,
 )
@@ -86,3 +95,64 @@ def test_no_hooks_leaves_text_off(tmp_path):
     folder = make_folder(tmp_path)
     _, spec = gen(folder, [])[0]
     assert "text" not in spec["segments"][0]
+
+
+# ---- metadata layer ---------------------------------------------------------
+
+def _vid(dur, **meta):
+    return Asset(Path("x.mp4"), "video", duration=dur, meta=AssetMeta.model_validate(meta))
+
+
+def test_subtract_avoid_carves_windows():
+    assert _subtract_avoid([(0, 30)], [[10, 20]]) == [(0, 10), (20, 30)]
+
+
+def test_video_trim_respects_usable_window():
+    a = _vid(60, usable=[[20, 26]])
+    rng = random.Random(0)
+    for _ in range(20):
+        in_, out, _len = _video_trim(a, 4.0, rng)
+        assert 20.0 <= in_ <= 22.001
+        assert out <= 26.001
+
+
+def test_video_trim_respects_avoid():
+    a = _vid(30, avoid=[[0, 10], [20, 30]])  # only [10, 20] is free
+    rng = random.Random(1)
+    for _ in range(20):
+        in_, out, _len = _video_trim(a, 4.0, rng)
+        assert 10.0 <= in_ and out <= 20.001
+
+
+def test_video_trim_whole_uses_entire_clip():
+    assert _video_trim(_vid(5, whole=True), 4.0, random.Random(0)) == (None, None, 5.0)
+
+
+def test_source_audio_mapping():
+    assert _source_audio(_vid(10, audio="require"))[0] == "mix"
+    assert _source_audio(_vid(10, audio="never"))[0] == "mute"
+    assert _source_audio(_vid(10))[0] == "mute"
+
+
+def test_spread_keeps_same_subject_apart():
+    davie1 = Asset(Path("a"), "image", meta=AssetMeta(subject="Davie"))
+    davie2 = Asset(Path("b"), "image", meta=AssetMeta(subject="Davie"))
+    group = Asset(Path("c"), "image", meta=AssetMeta(subject="Group"))
+    subs = [a.subject for a in _spread_by_subject([davie1, davie2, group])]
+    assert not any(subs[i] == subs[i + 1] == "Davie" for i in range(len(subs) - 1))
+
+
+def test_exclude_and_role_card_honored(tmp_path):
+    for i in range(4):
+        Image.new("RGB", (640, 480), (i * 40, 20, 20)).save(tmp_path / f"pic_{i}.png")
+    Image.new("RGB", (500, 500), (255, 255, 240)).save(tmp_path / "brand.png")
+    (tmp_path / "assets.yaml").write_text(
+        "assets:\n"
+        "  'pic_0.png': { exclude: true }\n"
+        "  'brand.png': { role: card }\n",
+        encoding="utf-8",
+    )
+    _, spec = gen(tmp_path, ["h"], length=10)[0]
+    refs = [s.get("image", "") for s in spec["segments"]]
+    assert not any("pic_0" in r for r in refs)          # excluded, never used
+    assert "brand.png" in spec["segments"][-1]["image"]  # role:card -> closing card
