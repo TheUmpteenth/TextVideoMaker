@@ -231,15 +231,27 @@ one page to watch the whole batch instead of opening files one by one. It's a pl
 file (references the draft mp4s by relative path), not an artifact.
 
 **M4 — media analysis: cull to the "good shots"**
-`tvm rank <asset_folder>` (and a `--rank` flag the generator can consume). Two tiers:
-- *Heuristic (first, reliable, cheap):* sharpness (Laplacian variance), exposure
-  (too dark / blown highlights), min-resolution floor, face presence, and near-duplicate
-  clustering (perceptual hash) so near-identical shots don't all get used. For video:
-  scene/quality sampling to pick the sharpest, liveliest segment. Optional deps
-  (opencv / imagehash) kept behind an extra so the core stays light.
-- *Aesthetic scoring (later, optional, behind a flag):* an ML/vision model for true
-  "is this a good photo" judgement. Heavier and inherently fuzzy — additive, not required.
-Output: a ranked/filtered asset list (+ optional contact sheet) that feeds M3.
+
+*M4a — image heuristics — DONE.* `tvm rank <folder>` scores every image on sharpness
+(variance of a Laplacian), exposure (mean luminance + dark/blown fractions), and
+resolution, into a 0–100 composite plus flags (blurry/dark/blown/tiny). Results cache in
+`analysis.json` (keyed by path+mtime+size) and a worst-first `rank/rank.html` contact
+sheet shows scores, flags, and raw metrics with thumbnails. `tvm generate --rank` consumes
+it: drops clearly-bad shots (`tiny`, or score < 20) and weights selection toward higher
+scores (Efraimidis–Spirakis) before subject-spread. Implemented with numpy only (no
+OpenCV) behind the optional `[analyze]` extra; degrades to a clear "install this" error.
+Manual `assets.yaml` always wins over computed scores.
+
+*Honest limits found on real data (273 images):* scores compress to ~40–98 for normal
+photos, so the absolute low-score filter rarely fires — the real effect is the `tiny` drop
+plus weighting (which is the intended, conservative behaviour). And the heuristics measure
+*quality*, not *content*: "not a real photo" (distressed textures, a logo used as a shot)
+scores fine and must still be handled by `assets.yaml exclude`. The two are complementary.
+
+*Still to do:* **M4b** near-duplicate clustering (perceptual hash, `imagehash`) to dedupe
+the pool; **M4c** video frame sampling to score clips and auto-suggest the sharpest
+`usable` window; **M4d (deferred)** face detection / aesthetic ML model. Person-level
+`subject` auto-tagging needs face embeddings and stays deferred — manual tags for now.
 
 **M5 — multiple images per frame (collage / layout)**
 Extend a segment from one visual to a *layout* of several fitted images composited

@@ -14,6 +14,9 @@ dependencies = [
     "imageio-ffmpeg>=0.5",
 ]
 
+[project.optional-dependencies]
+analyze = ["numpy>=1.24"]  # for `tvm rank` / `tvm generate --rank`
+
 [project.scripts]
 tvm = "textvideomaker.cli:main"
 

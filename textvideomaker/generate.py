@@ -16,6 +16,7 @@ from typing import Optional
 
 import yaml
 
+from .analyze import RankIndex
 from .assetmeta import AssetMeta, load_asset_meta
 from .probe import Prober
 from .spec import Spec
@@ -25,7 +26,7 @@ VIDEO_EXT = {".mp4", ".mov", ".m4v", ".avi", ".mkv", ".webm"}
 AUDIO_EXT = {".mp3", ".wav", ".m4a", ".aac", ".flac", ".ogg"}
 
 # Never descend into these — they hold our own output, not source material.
-_SKIP_DIRS = {"out", "generated", ".git", "__pycache__", ".venv", "node_modules"}
+_SKIP_DIRS = {"out", "generated", "rank", ".git", "__pycache__", ".venv", "node_modules"}
 
 CREAM = "#fefeeb"
 MIN_VIDEO_LEN = 1.5   # clips shorter than this make poor crossfade material
@@ -204,6 +205,26 @@ def _projected_total(durations: list[float], has_card: bool) -> float:
     return total - max(0, n - 1) * XFADE
 
 
+def _rel_to(path: Path, folder: Path) -> str:
+    return os.path.relpath(path, folder).replace(os.sep, "/")
+
+
+def _ordered_pool(pool: list[Asset], rng: random.Random,
+                  rank: Optional[RankIndex], folder: Path) -> list[Asset]:
+    """A (weighted, if ranked) shuffle followed by subject-spread."""
+    if rank:
+        # Efraimidis-Spirakis weighted sampling: key = u ** (1/weight), high first
+        ordered = sorted(
+            pool,
+            key=lambda a: rng.random() ** (1.0 / rank.weight(_rel_to(a.path, folder))),
+            reverse=True,
+        )
+    else:
+        ordered = pool[:]
+        rng.shuffle(ordered)
+    return _spread_by_subject(ordered)
+
+
 def generate_specs(
     folder: Path,
     hooks: list[str],
@@ -217,6 +238,7 @@ def generate_specs(
     music_pool: list[Asset],
     out_dir: Path,
     prober: Prober,
+    rank: Optional[RankIndex] = None,
 ) -> list[tuple[str, dict]]:
     images, videos, audios = scan_assets(folder, prober,
                                          extra_skip={out_dir.name})
@@ -226,6 +248,8 @@ def generate_specs(
     content_images = [a for a in images if not a.is_card]
     content_videos = [v for v in videos if (v.duration or 0) >= MIN_VIDEO_LEN]
     content = content_images + content_videos
+    if rank:  # drop clearly-bad shots (manual assets.yaml has already been applied)
+        content = [a for a in content if not rank.is_bad(_rel_to(a.path, folder))]
     if not content:
         raise ValueError(f"No usable images or videos found under {folder}")
     tracks = [t for t in (music_pool or audios) if not t.excluded]
@@ -235,9 +259,7 @@ def generate_specs(
         rng = random.Random(seed * 100003 + i)
         hook = hooks[i % len(hooks)] if hooks else None
 
-        pool = content[:]
-        rng.shuffle(pool)
-        pool = _spread_by_subject(pool)  # keep same-subject shots off each other
+        pool = _ordered_pool(content, rng, rank, folder)
         hook_asset = pool[0]
         has_card = bool(logos)
 

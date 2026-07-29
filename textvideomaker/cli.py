@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import random
 import subprocess
 import sys
@@ -11,8 +12,18 @@ import time
 from pathlib import Path
 
 from . import __version__
+from .analyze import (
+    AnalyzeError,
+    RankIndex,
+    RankReportItem,
+    analyze_image,
+    build_rank_html,
+    load_analysis,
+    save_analysis,
+)
+from .assetmeta import load_asset_meta
 from .ffmpeg_build import build_render_command, draft_dimensions
-from .generate import Asset, generate_specs, read_hooks, scan_assets, write_specs
+from .generate import IMAGE_EXT, _SKIP_DIRS, Asset, generate_specs, read_hooks, scan_assets, write_specs
 from .probe import Prober
 from .review import (
     build_index_html,
@@ -126,10 +137,18 @@ def cmd_generate(args: argparse.Namespace) -> int:
     music_pool = _music_pool(args.music, prober)
     seed = args.seed if args.seed is not None else random.randrange(1 << 30)
 
+    rank = None
+    if args.rank:
+        rank = RankIndex.from_folder(folder)
+        if not rank:
+            raise SpecError(
+                "--rank needs analysis first: run `tvm rank <folder>` to build analysis.json"
+            )
+
     specs = generate_specs(
         folder, hooks, count=args.count, size=args.size, length=args.length,
         fps=args.fps, cta=args.cta, seed=seed, music_pool=music_pool,
-        out_dir=out_dir, prober=prober,
+        out_dir=out_dir, prober=prober, rank=rank,
     )
     written = write_specs(specs, out_dir)
 
@@ -139,6 +158,62 @@ def cmd_generate(args: argparse.Namespace) -> int:
     rel = out_dir
     print(f"\nRender them all (draft):")
     print(f'  for %f in ("{rel}\\gen_*.yaml") do tvm render "%f" --draft')
+    return 0
+
+
+def _iter_image_files(folder: Path):
+    for p in sorted(folder.rglob("*")):
+        if not p.is_file() or p.suffix.lower() not in IMAGE_EXT:
+            continue
+        if any(part in _SKIP_DIRS for part in p.relative_to(folder).parts[:-1]):
+            continue
+        yield p
+
+
+def cmd_rank(args: argparse.Namespace) -> int:
+    folder = Path(args.dir).resolve()
+    if not folder.is_dir():
+        raise SpecError(f"Not a folder: {folder}")
+
+    resolver = load_asset_meta(folder)
+    rank_dir = folder / "rank"
+    data = load_analysis(folder)
+    assets = data["assets"]
+
+    report: list[RankReportItem] = []
+    n_new = 0
+    try:
+        for i, path in enumerate(_iter_image_files(folder)):
+            rel = os.path.relpath(path, folder).replace(os.sep, "/")
+            st = path.stat()
+            thumb = rank_dir / "thumbs" / f"thumb_{i:03d}.jpg"
+            entry = assets.get(rel)
+            fresh = entry and entry.get("mtime") == st.st_mtime and entry.get("size") == st.st_size
+            stats = analyze_image(path, thumb_path=thumb)  # always (re)builds the thumb
+            if not fresh:
+                n_new += 1
+            assets[rel] = stats.to_json(st.st_mtime, st.st_size)
+            excluded = resolver.for_asset(rel, path.name).exclude
+            report.append(RankReportItem(
+                name=rel, thumb=os.path.relpath(thumb, rank_dir).replace(os.sep, "/"),
+                stats=stats, excluded=excluded,
+            ))
+    except AnalyzeError as e:
+        raise SpecError(str(e)) from None
+
+    if not report:
+        raise SpecError(f"No images found under {folder}")
+
+    save_analysis(folder, data)
+    report.sort(key=lambda it: it.stats.score)  # worst first
+    rank_dir.mkdir(parents=True, exist_ok=True)
+    (rank_dir / "rank.html").write_text(
+        build_rank_html(report, folder.name), encoding="utf-8")
+
+    flagged = sum(1 for it in report if it.stats.flags)
+    print(f"Analysed {len(report)} images ({n_new} new/changed), {flagged} flagged")
+    print(f"  analysis: {folder / 'analysis.json'}")
+    print(f"  contact sheet: {rank_dir / 'rank.html'}")
     return 0
 
 
@@ -220,8 +295,16 @@ def main(argv: list[str] | None = None) -> int:
     p_gen.add_argument("--music", default=None,
                        help="A track file or folder of tracks (default: audio in the folder)")
     p_gen.add_argument("--fps", type=int, default=30)
+    p_gen.add_argument("--rank", action="store_true",
+                       help="Use analysis.json to drop bad shots and favour good ones "
+                            "(run `tvm rank` first)")
     p_gen.add_argument("-o", "--out", help="Output dir for specs (default <folder>/generated)")
     p_gen.set_defaults(func=cmd_generate)
+
+    p_rank = sub.add_parser("rank",
+                            help="Score images by quality and build a ranked contact sheet")
+    p_rank.add_argument("dir", help="Folder of images to analyse")
+    p_rank.set_defaults(func=cmd_rank)
 
     p_rev = sub.add_parser("review",
                            help="Draft-render a folder of specs and build a contact sheet")

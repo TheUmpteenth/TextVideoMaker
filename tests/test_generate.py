@@ -156,3 +156,25 @@ def test_exclude_and_role_card_honored(tmp_path):
     refs = [s.get("image", "") for s in spec["segments"]]
     assert not any("pic_0" in r for r in refs)          # excluded, never used
     assert "brand.png" in spec["segments"][-1]["image"]  # role:card -> closing card
+
+
+def test_rank_drops_bad_and_favours_good(tmp_path):
+    from textvideomaker.analyze import RankIndex
+    for i in range(4):
+        Image.new("RGB", (640, 480), (i * 40, 20, 20)).save(tmp_path / f"pic_{i}.png")
+    Image.new("RGB", (500, 500), (255, 255, 240)).save(tmp_path / "Bruach_logo.png")
+    rank = RankIndex({
+        "pic_0.png": {"score": 5.0, "flags": ["tiny"]},   # clearly bad -> dropped
+        "pic_1.png": {"score": 90.0, "flags": []},        # great
+        "pic_2.png": {"score": 40.0, "flags": []},
+        "pic_3.png": {"score": 35.0, "flags": []},
+    })
+    # generate several so the weighting has a chance to show
+    seen_first = set()
+    for s in range(6):
+        _, spec = gen(tmp_path, ["h"], count=1, length=10, seed=s, rank=rank)[0]
+        content = [seg.get("image", "") for seg in spec["segments"][:-1]]
+        assert not any("pic_0" in r for r in content)     # bad shot never used
+        seen_first.add(spec["segments"][0]["image"])
+    # the top-scored shot should headline at least once across the batch
+    assert any("pic_1" in v for v in seen_first)

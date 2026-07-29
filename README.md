@@ -74,6 +74,23 @@ to redo) and writes an `index.html` in the folder that embeds every draft in a g
 its hook and duration. Open it in a browser to watch the whole batch on one page and keep
 the ones you like.
 
+### Ranking shots by quality (optional)
+
+Install the analysis extra and score your images so the generator can favour the good ones:
+
+```powershell
+.venv\Scripts\python -m pip install -e ".[analyze]"
+.venv\Scripts\tvm rank C:\path\to\assets
+.venv\Scripts\tvm generate C:\path\to\assets --texts hooks.txt --count 20 --rank
+```
+
+`tvm rank` scores each image on sharpness, exposure, and resolution, writes `analysis.json`,
+and builds a worst-first `rank\rank.html` contact sheet (scores + flags + thumbnails).
+`generate --rank` then drops clearly-bad shots (tiny / very low score) and weights selection
+toward higher-scoring images. It measures *quality*, not *content* — for "don't use this at
+all" (textures, logos-as-shots) keep using `assets.yaml`'s `exclude`; anything in
+`assets.yaml` overrides the scores.
+
 ## Spec format
 
 See [examples/first_video/video.yaml](examples/first_video/video.yaml) for a
