@@ -4,15 +4,20 @@ import numpy as np
 import pytest
 from PIL import Image
 
+import subprocess
+
 from textvideomaker.analyze import (
     ANALYSIS_VERSION,
     RankIndex,
     analyze_image,
+    analyze_video,
+    best_window,
     cluster_by_hash,
     load_analysis,
     save_analysis,
     score_metrics,
 )
+from textvideomaker.runner import find_ffmpeg
 
 
 def test_sharp_scores_higher_than_blurry(tmp_path):
@@ -107,3 +112,39 @@ def test_cluster_missing_hash_is_singleton():
     clusters = cluster_by_hash({"a": "", "b": "", "c": "ffffffffffffffff"})
     assert clusters["a"] != clusters["b"] != clusters["c"]
     assert len({clusters["a"], clusters["b"], clusters["c"]}) == 3
+
+
+# ---- M4c: video analysis ----------------------------------------------------
+
+def test_best_window_picks_sharpest_region():
+    times = [1.0, 3.0, 5.0, 7.0]
+    sharps = [10, 20, 100, 90]      # sharpest around t=5-7
+    w = best_window(times, sharps, [0, 0, 0, 0], duration=8.0, want=2.0)
+    assert w[0] >= 4.0 and w[1] <= 8.0
+
+
+def test_best_window_avoids_dark_when_possible():
+    times = [1.0, 3.0, 5.0, 7.0]
+    sharps = [100, 100, 20, 20]     # sharp region is dark, dim region is clean
+    darks = [1.0, 1.0, 0.0, 0.0]
+    w = best_window(times, sharps, darks, duration=8.0, want=2.0)
+    assert w[0] >= 4.0             # prefers the non-dark second half
+
+
+def test_best_window_short_clip_is_whole():
+    assert best_window([0.5], [50], [0], duration=1.5, want=4.0) == [0.0, 1.5]
+
+
+def test_analyze_video_on_generated_clip(tmp_path):
+    ff = find_ffmpeg()
+    clip = tmp_path / "clip.mp4"
+    subprocess.run(
+        [ff, "-nostdin", "-loglevel", "error", "-y", "-f", "lavfi",
+         "-i", "testsrc2=size=320x240:rate=15:duration=6", "-pix_fmt", "yuv420p",
+         str(clip)], check=True)
+    vs = analyze_video(clip, ff, 320, 240, 6.0)
+    assert vs.kind == "video"
+    assert vs.duration == 6.0 and vs.width == 320
+    assert vs.score >= 0
+    assert 0.0 <= vs.best_window[0] < vs.best_window[1] <= 6.0
+    assert vs.liveliness > 0.0     # testsrc2 moves

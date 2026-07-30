@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import os
 import random
 import subprocess
@@ -17,6 +18,7 @@ from .analyze import (
     RankIndex,
     RankReportItem,
     analyze_image,
+    analyze_video,
     build_rank_html,
     cluster_by_hash,
     load_analysis,
@@ -24,7 +26,16 @@ from .analyze import (
 )
 from .assetmeta import load_asset_meta
 from .ffmpeg_build import build_render_command, draft_dimensions
-from .generate import IMAGE_EXT, _SKIP_DIRS, Asset, generate_specs, read_hooks, scan_assets, write_specs
+from .generate import (
+    IMAGE_EXT,
+    VIDEO_EXT,
+    _SKIP_DIRS,
+    Asset,
+    generate_specs,
+    read_hooks,
+    scan_assets,
+    write_specs,
+)
 from .probe import Prober
 from .review import (
     build_index_html,
@@ -162,9 +173,9 @@ def cmd_generate(args: argparse.Namespace) -> int:
     return 0
 
 
-def _iter_image_files(folder: Path):
+def _iter_media_files(folder: Path, exts: set[str]):
     for p in sorted(folder.rglob("*")):
-        if not p.is_file() or p.suffix.lower() not in IMAGE_EXT:
+        if not p.is_file() or p.suffix.lower() not in exts:
             continue
         if any(part in _SKIP_DIRS for part in p.relative_to(folder).parts[:-1]):
             continue
@@ -177,36 +188,67 @@ def cmd_rank(args: argparse.Namespace) -> int:
         raise SpecError(f"Not a folder: {folder}")
 
     resolver = load_asset_meta(folder)
+    ffmpeg = find_ffmpeg()
+    prober = Prober(ffmpeg, find_ffprobe())
     rank_dir = folder / "rank"
+    thumbs = rank_dir / "thumbs"
     data = load_analysis(folder)
     assets = data["assets"]
 
     report: list[RankReportItem] = []
+    img_hashes: dict[str, str] = {}
     n_new = 0
     try:
-        for i, path in enumerate(_iter_image_files(folder)):
+        for i, path in enumerate(_iter_media_files(folder, IMAGE_EXT)):
             rel = os.path.relpath(path, folder).replace(os.sep, "/")
             st = path.stat()
-            thumb = rank_dir / "thumbs" / f"thumb_{i:03d}.jpg"
+            thumb = thumbs / f"thumb_{i:04d}.jpg"
             entry = assets.get(rel)
             fresh = entry and entry.get("mtime") == st.st_mtime and entry.get("size") == st.st_size
             stats = analyze_image(path, thumb_path=thumb)  # always (re)builds the thumb
             if not fresh:
                 n_new += 1
             assets[rel] = stats.to_json(st.st_mtime, st.st_size)
-            excluded = resolver.for_asset(rel, path.name).exclude
+            img_hashes[rel] = stats.phash
             report.append(RankReportItem(
                 name=rel, thumb=os.path.relpath(thumb, rank_dir).replace(os.sep, "/"),
-                stats=stats, excluded=excluded,
+                score=stats.score, flags=list(stats.flags), kind="image",
+                meta=f"sharp {stats.sharpness:.0f} · bright {stats.brightness:.0f} · {stats.width}×{stats.height}",
+                excluded=resolver.for_asset(rel, path.name).exclude,
+            ))
+
+        for path in _iter_media_files(folder, VIDEO_EXT):
+            rel = os.path.relpath(path, folder).replace(os.sep, "/")
+            st = path.stat()
+            thumb = thumbs / ("v_" + hashlib.md5(rel.encode()).hexdigest()[:12] + ".jpg")
+            entry = assets.get(rel)
+            fresh = (entry and entry.get("kind") == "video"
+                     and entry.get("mtime") == st.st_mtime
+                     and entry.get("size") == st.st_size and thumb.is_file())
+            if fresh:
+                vjson = entry
+            else:
+                info = prober.probe(path)
+                vs = analyze_video(path, ffmpeg, info.width or 0, info.height or 0,
+                                   info.duration or 0.0, thumb_path=thumb)
+                vjson = vs.to_json(st.st_mtime, st.st_size)
+                assets[rel] = vjson
+                n_new += 1
+            w = vjson.get("best_window", [0, 0])
+            report.append(RankReportItem(
+                name=rel, thumb=os.path.relpath(thumb, rank_dir).replace(os.sep, "/"),
+                score=vjson["score"], flags=list(vjson.get("flags", [])), kind="video",
+                meta=f"{vjson['duration']:.0f}s · best {w[0]:.0f}–{w[1]:.0f}s · sharp {vjson['sharpness']:.0f}",
+                excluded=resolver.for_asset(rel, path.name).exclude,
             ))
     except AnalyzeError as e:
         raise SpecError(str(e)) from None
 
     if not report:
-        raise SpecError(f"No images found under {folder}")
+        raise SpecError(f"No images or videos found under {folder}")
 
-    # near-duplicate clustering across everything we analysed
-    clusters = cluster_by_hash({it.name: it.stats.phash for it in report})
+    # near-duplicate clustering over images only (videos have no perceptual hash)
+    clusters = cluster_by_hash(img_hashes)
     sizes: dict[int, int] = {}
     for cid in clusters.values():
         sizes[cid] = sizes.get(cid, 0) + 1
@@ -217,15 +259,16 @@ def cmd_rank(args: argparse.Namespace) -> int:
             it.dup_group = sizes.get(cid, 1)
 
     save_analysis(folder, data)
-    report.sort(key=lambda it: (it.stats.score, it.name))  # worst first
+    report.sort(key=lambda it: (it.score, it.name))  # worst first
     rank_dir.mkdir(parents=True, exist_ok=True)
     (rank_dir / "rank.html").write_text(
         build_rank_html(report, folder.name), encoding="utf-8")
 
-    flagged = sum(1 for it in report if it.stats.flags)
+    n_vid = sum(1 for it in report if it.kind == "video")
+    flagged = sum(1 for it in report if it.flags)
     dup_groups = sum(1 for c in sizes.values() if c > 1)
-    print(f"Analysed {len(report)} images ({n_new} new/changed), {flagged} flagged, "
-          f"{dup_groups} near-duplicate groups")
+    print(f"Analysed {len(report) - n_vid} images + {n_vid} videos "
+          f"({n_new} new/changed), {flagged} flagged, {dup_groups} near-duplicate groups")
     print(f"  analysis: {folder / 'analysis.json'}")
     print(f"  contact sheet: {rank_dir / 'rank.html'}")
     return 0

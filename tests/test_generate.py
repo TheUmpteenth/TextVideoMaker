@@ -128,6 +128,22 @@ def test_video_trim_whole_uses_entire_clip():
     assert _video_trim(_vid(5, whole=True), 4.0, random.Random(0)) == (None, None, 5.0)
 
 
+def test_video_trim_uses_suggested_window(tmp_path):
+    a = _vid(30)                       # no manual usable
+    a.suggested_window = [12.0, 20.0]  # from analysis (--rank)
+    rng = random.Random(0)
+    for _ in range(20):
+        in_, out, _ln = _video_trim(a, 4.0, rng)
+        assert 12.0 <= in_ and out <= 20.001
+
+
+def test_manual_usable_overrides_suggested_window():
+    a = _vid(30, usable=[[2, 6]])
+    a.suggested_window = [20.0, 28.0]   # ignored — manual wins
+    in_, out, _ln = _video_trim(a, 4.0, random.Random(0))
+    assert 2.0 <= in_ and out <= 6.001
+
+
 def test_source_audio_mapping():
     assert _source_audio(_vid(10, audio="require"))[0] == "mix"
     assert _source_audio(_vid(10, audio="never"))[0] == "mute"

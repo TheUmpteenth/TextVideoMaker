@@ -44,6 +44,7 @@ class Asset:
     duration: Optional[float] = None
     is_logo: bool = False
     meta: AssetMeta = field(default_factory=AssetMeta)
+    suggested_window: Optional[list[float]] = None  # from analysis (--rank), soft usable
 
     @property
     def excluded(self) -> bool:
@@ -145,8 +146,14 @@ def _video_trim(asset: Asset, want: float, rng: random.Random):
     if meta.whole:
         return None, None, round(dur, 2)
 
-    if meta.usable:
-        windows = [(max(0.0, s), min(dur, e)) for s, e in meta.usable if s < dur and e > s]
+    if meta.usable:                       # manual assets.yaml wins
+        ranges = meta.usable
+    elif asset.suggested_window:          # else the analysis best-window (--rank)
+        ranges = [asset.suggested_window]
+    else:
+        ranges = None
+    if ranges:
+        windows = [(max(0.0, s), min(dur, e)) for s, e in ranges if s < dur and e > s]
     else:
         windows = [(0.0, dur)]
     if meta.avoid:
@@ -263,8 +270,13 @@ def generate_specs(
     content_images = [a for a in images if not a.is_card]
     content_videos = [v for v in videos if (v.duration or 0) >= MIN_VIDEO_LEN]
     content = content_images + content_videos
-    if rank:  # drop clearly-bad shots (manual assets.yaml has already been applied)
+    if rank:
+        # drop clearly-bad shots (manual assets.yaml has already been applied)
         content = [a for a in content if not rank.is_bad(_rel_to(a.path, folder))]
+        # attach the analysis best-window to videos that have no manual trim
+        for v in content_videos:
+            if not v.meta.usable and not v.meta.whole:
+                v.suggested_window = rank.best_window(_rel_to(v.path, folder))
     if not content:
         raise ValueError(f"No usable images or videos found under {folder}")
     tracks = [t for t in (music_pool or audios) if not t.excluded]

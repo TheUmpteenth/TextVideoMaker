@@ -84,14 +84,15 @@ Install the analysis extra and score your images so the generator can favour the
 .venv\Scripts\tvm generate C:\path\to\assets --texts hooks.txt --count 20 --rank
 ```
 
-`tvm rank` scores each image on sharpness, exposure, and resolution, detects near-duplicates
-(perceptual hash), writes `analysis.json`, and builds a worst-first `rank\rank.html` contact
-sheet (scores + flags + `dup×N` badges + thumbnails). `generate --rank` then drops
-clearly-bad shots (tiny / very low score), weights selection toward higher-scoring images,
-and keeps near-duplicate shots (burst frames, `photo`/`photo(1)` copies) out of the same
-video. It measures *quality*, not *content* — for "don't use this at all" (textures,
-logos-as-shots) keep using `assets.yaml`'s `exclude`; anything in `assets.yaml` overrides
-the scores.
+`tvm rank` scores each **image** on sharpness, exposure, and resolution and detects
+near-duplicates (perceptual hash); it also scores each **video** clip by sampling frames
+(sharpness/exposure/liveliness) and suggests the clip's sharpest `best_window`. It writes
+`analysis.json` and a worst-first `rank\rank.html` contact sheet (scores + flags + `dup×N`
+badges + thumbnails). `generate --rank` then drops clearly-bad shots, weights selection
+toward higher-scoring assets, keeps near-duplicate images out of the same video, and trims
+each clip to its suggested window. It measures *quality*, not *content* — for "don't use
+this at all" (textures, logos-as-shots) keep using `assets.yaml`'s `exclude`; anything in
+`assets.yaml` (including a manual `usable` window) overrides the analysis.
 
 ## Spec format
 

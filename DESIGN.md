@@ -258,8 +258,19 @@ Verified on 306 images → 121 near-dup groups; every `DSC(1)` pair clustered, a
 batch produced 0 videos with an internal near-dup. imagehash is optional (part of the
 `[analyze]` extra); without it, hashes are empty and clustering is simply skipped.
 
-*Still to do:* **M4c** video frame sampling to score clips and auto-suggest the sharpest
-`usable` window; **M4d (deferred)** face detection / aesthetic ML model. Person-level
+*M4c — video quality analysis — DONE.* `tvm rank` also scores video clips: it samples
+~10 frames per clip (ffmpeg `-ss` seeks, so even hour-long files are cheap), takes the
+median sharpness/brightness across them, measures liveliness (mean frame-to-frame change),
+and reuses the image scoring for the composite + flags (blurry/dark/tiny, plus `static`).
+It suggests a `best_window` — the sharpest, non-dark segment of the target length — stored
+in `analysis.json`; videos appear in the contact sheet with a `video` badge and their
+window. `tvm generate --rank` scores/weights videos like images and trims each clip to its
+suggested `best_window` **unless** a manual `assets.yaml` `usable`/`whole` is set (manual
+wins). Video results cache by mtime+size. Verified on 31 real clips: blurry clips flagged,
+windows suggested and varied, and generated trims stayed inside their window (manual or
+suggested) every time.
+
+*Still to do:* **M4d (deferred)** face detection / aesthetic ML model. Person-level
 `subject` auto-tagging needs face embeddings and stays deferred — manual tags for now.
 
 **M5 — multiple images per frame (collage / layout)**

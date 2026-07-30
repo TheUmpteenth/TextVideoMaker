@@ -12,6 +12,8 @@ from __future__ import annotations
 
 import html
 import json
+import subprocess
+import tempfile
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Optional
@@ -22,6 +24,8 @@ ANALYSIS_FILE = "analysis.json"
 ANALYSIS_VERSION = 1
 _MEASURE_DIM = 512   # downscale before measuring so sharpness is resolution-independent
 _THUMB_DIM = 320
+VIDEO_WANT = 4.0     # target window length when suggesting a clip's best segment
+_VIDEO_SAMPLES = 10  # frames sampled per clip
 
 
 class AnalyzeError(Exception):
@@ -91,6 +95,21 @@ def score_metrics(sharpness: float, brightness: float, dark_frac: float,
     return score, flags
 
 
+def _gray_array(np, im: Image.Image):
+    gray = im.convert("L")
+    gray.thumbnail((_MEASURE_DIM, _MEASURE_DIM), Image.LANCZOS)
+    return np.asarray(gray, dtype="float64")
+
+
+def _metrics_from_gray(np, arr) -> tuple[float, float, float, float]:
+    """(sharpness, brightness, dark_frac, blown_frac) from a grayscale array."""
+    # 4-neighbour Laplacian; its variance is a standard focus/blur measure
+    lap = (arr[:-2, 1:-1] + arr[2:, 1:-1] + arr[1:-1, :-2] + arr[1:-1, 2:]
+           - 4.0 * arr[1:-1, 1:-1])
+    return (float(lap.var()), float(arr.mean()),
+            float((arr < 30).mean()), float((arr > 225).mean()))
+
+
 def analyze_image(path: Path, thumb_path: Optional[Path] = None) -> ImageStats:
     np = _numpy()
     ih = _try_imagehash()
@@ -103,18 +122,9 @@ def analyze_image(path: Path, thumb_path: Optional[Path] = None) -> ImageStats:
             thumb.thumbnail((_THUMB_DIM, _THUMB_DIM), Image.LANCZOS)
             thumb_path.parent.mkdir(parents=True, exist_ok=True)
             thumb.save(thumb_path, "JPEG", quality=80)
-        gray = im.convert("L")
-        gray.thumbnail((_MEASURE_DIM, _MEASURE_DIM), Image.LANCZOS)
-        arr = np.asarray(gray, dtype="float64")
+        arr = _gray_array(np, im)
 
-    # 4-neighbour Laplacian; its variance is a standard focus/blur measure
-    lap = (arr[:-2, 1:-1] + arr[2:, 1:-1] + arr[1:-1, :-2] + arr[1:-1, 2:]
-           - 4.0 * arr[1:-1, 1:-1])
-    sharpness = float(lap.var())
-    brightness = float(arr.mean())
-    dark_frac = float((arr < 30).mean())
-    blown_frac = float((arr > 225).mean())
-
+    sharpness, brightness, dark_frac, blown_frac = _metrics_from_gray(np, arr)
     score, flags = score_metrics(sharpness, brightness, dark_frac, blown_frac, w, h)
     return ImageStats(
         width=w, height=h, sharpness=round(sharpness, 1),
@@ -185,37 +195,167 @@ def save_analysis(folder: Path, data: dict) -> None:
         json.dumps(data, indent=1), encoding="utf-8")
 
 
+# ---- video analysis (M4c) ---------------------------------------------------
+
+@dataclass
+class VideoStats:
+    width: int
+    height: int
+    duration: float
+    sharpness: float          # median over sampled frames
+    brightness: float         # median
+    liveliness: float         # mean frame-to-frame change, 0..1
+    score: float
+    best_window: list[float]  # [start, end] — suggested usable segment
+    flags: list[str] = field(default_factory=list)
+    kind: str = "video"
+
+    def to_json(self, mtime: float, size: int) -> dict:
+        d = asdict(self)
+        d["mtime"], d["size"] = mtime, size
+        return d
+
+
+def _extract_frame(ffmpeg: str, path: Path, t: float, dest: Path) -> bool:
+    proc = subprocess.run(
+        [ffmpeg, "-nostdin", "-loglevel", "error", "-ss", f"{max(0.0, t):.3f}",
+         "-i", str(path), "-frames:v", "1",
+         "-vf", "scale='min(512,iw)':-2", "-y", str(dest)],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+    )
+    return proc.returncode == 0 and dest.is_file()
+
+
+def _median(values: list[float]) -> float:
+    if not values:
+        return 0.0
+    s = sorted(values)
+    n = len(s)
+    return s[n // 2] if n % 2 else (s[n // 2 - 1] + s[n // 2]) / 2
+
+
+def best_window(times: list[float], sharps: list[float], darks: list[float],
+                duration: float, want: float = VIDEO_WANT) -> list[float]:
+    """Pick the want-length window whose sampled frames are sharpest.
+
+    Windows that contain a mostly-dark frame are only chosen if there is no
+    non-dark alternative.
+    """
+    if duration <= want or len(times) < 2:
+        return [0.0, round(duration, 2)]
+    candidates = []  # (is_dark, avg_sharpness, start)
+    for t in times:
+        start = max(0.0, min(t, duration - want))
+        end = start + want
+        idx = [j for j, tj in enumerate(times) if start - 0.01 <= tj <= end + 0.01]
+        if not idx:
+            continue
+        avg = sum(sharps[j] for j in idx) / len(idx)
+        dark = any(darks[j] > 0.7 for j in idx)
+        candidates.append((dark, avg, start))
+    if not candidates:
+        return [0.0, round(min(want, duration), 2)]
+    non_dark = [c for c in candidates if not c[0]]
+    _, _, start = max(non_dark or candidates, key=lambda c: c[1])
+    return [round(start, 2), round(min(start + want, duration), 2)]
+
+
+def analyze_video(path: Path, ffmpeg: str, width: int, height: int, duration: float,
+                  thumb_path: Optional[Path] = None,
+                  samples: int = _VIDEO_SAMPLES) -> VideoStats:
+    np = _numpy()
+    dur = duration or 0.0
+    n = max(3, min(samples, int(dur) + 1)) if dur > 0 else 3
+    times = [dur * (i + 0.5) / n for i in range(n)] if dur > 0 else [0.0]
+
+    sharps: list[float] = []
+    brights: list[float] = []
+    darks: list[float] = []
+    grays: list = []
+    kept_times: list[float] = []
+    frame_files: list[Path] = []
+    with tempfile.TemporaryDirectory(prefix="tvm_vid_") as tmp:
+        for k, t in enumerate(times):
+            fp = Path(tmp) / f"f{k:02d}.png"
+            if not _extract_frame(ffmpeg, path, t, fp):
+                continue
+            with Image.open(fp) as im:
+                arr = _gray_array(np, im.convert("RGB"))
+            s, b, dk, _bl = _metrics_from_gray(np, arr)
+            sharps.append(s); brights.append(b); darks.append(dk)
+            grays.append(arr); kept_times.append(t); frame_files.append(fp)
+
+        if not sharps:  # unreadable video
+            return VideoStats(width, height, round(dur, 2), 0.0, 0.0, 0.0, 0.0,
+                              [0.0, round(dur, 2)], ["unreadable"])
+
+        # liveliness: mean absolute change between consecutive frames (0..1)
+        diffs = []
+        for a, b in zip(grays, grays[1:]):
+            if a.shape == b.shape:
+                diffs.append(float(np.abs(a - b).mean()) / 255.0)
+        liveliness = sum(diffs) / len(diffs) if diffs else 0.0
+
+        win = best_window(kept_times, sharps, darks, dur)
+
+        if thumb_path is not None:  # thumbnail from the frame nearest the best window's start
+            mid = win[0] + (win[1] - win[0]) / 2
+            idx = min(range(len(kept_times)), key=lambda j: abs(kept_times[j] - mid))
+            with Image.open(frame_files[idx]) as im:
+                thumb = im.convert("RGB")
+                thumb.thumbnail((_THUMB_DIM, _THUMB_DIM), Image.LANCZOS)
+                thumb_path.parent.mkdir(parents=True, exist_ok=True)
+                thumb.save(thumb_path, "JPEG", quality=80)
+
+    med_sharp = _median(sharps)
+    med_bright = _median(brights)
+    mean_dark = sum(darks) / len(darks)
+    score, flags = score_metrics(med_sharp, med_bright, mean_dark, 0.0, width, height)
+    if liveliness < 0.01:
+        flags.append("static")
+    return VideoStats(
+        width=width, height=height, duration=round(dur, 2),
+        sharpness=round(med_sharp, 1), brightness=round(med_bright, 1),
+        liveliness=round(liveliness, 4), score=round(score, 1),
+        best_window=win, flags=flags,
+    )
+
+
 @dataclass
 class RankReportItem:
     name: str
     thumb: str          # relative path to the thumbnail
-    stats: ImageStats
-    excluded: bool      # manually excluded via assets.yaml
-    dup_group: int = 1  # size of this image's near-duplicate cluster
+    score: float
+    flags: list[str]
+    meta: str           # the raw-metrics line under the thumbnail
+    kind: str = "image"
+    excluded: bool = False   # manually excluded via assets.yaml
+    dup_group: int = 1       # size of this image's near-duplicate cluster
 
 
 def build_rank_html(items: list[RankReportItem], title: str) -> str:
     """Contact sheet sorted worst-first, showing scores, flags and raw metrics."""
     cards = []
     for it in items:
-        s = it.stats
         flag_html = "".join(
-            f'<span class="flag">{html.escape(f)}</span>' for f in s.flags)
+            f'<span class="flag">{html.escape(f)}</span>' for f in it.flags)
+        if it.kind == "video":
+            flag_html += '<span class="flag video">video</span>'
         if it.dup_group > 1:
             flag_html += f'<span class="flag dup">dup×{it.dup_group}</span>'
         if it.excluded:
             flag_html += '<span class="flag manual">excluded</span>'
         cards.append(f"""      <figure class="card{' dim' if it.excluded else ''}">
-        <div class="score">{s.score:.0f}</div>
+        <div class="score">{it.score:.0f}</div>
         <img src="{html.escape(it.thumb)}" loading="lazy" alt="">
         <figcaption>
           <div class="name">{html.escape(it.name)}</div>
           <div class="flags">{flag_html}</div>
-          <div class="meta">sharp {s.sharpness:.0f} · bright {s.brightness:.0f} · {s.width}×{s.height}</div>
+          <div class="meta">{html.escape(it.meta)}</div>
         </figcaption>
       </figure>""")
     grid = "\n".join(cards)
-    flagged = sum(1 for it in items if it.stats.flags)
+    flagged = sum(1 for it in items if it.flags)
     return f"""<!doctype html>
 <html lang="en">
 <head>
@@ -245,6 +385,7 @@ def build_rank_html(items: list[RankReportItem], title: str) -> str:
            background:#5a2330; color:#ffb3c0; margin-right:4px; }}
   .flag.manual {{ background:#2a2b31; color:#9a9aa2; }}
   .flag.dup {{ background:#3a3320; color:#f0d38a; }}
+  .flag.video {{ background:#1f3a4a; color:#8fd0ff; }}
   .meta {{ color:#83838c; font-size:11px; }}
 </style>
 </head>
@@ -281,6 +422,10 @@ class RankIndex:
     def cluster(self, rel: str) -> Optional[int]:
         entry = self.assets.get(rel)
         return entry.get("cluster") if entry else None
+
+    def best_window(self, rel: str) -> Optional[list[float]]:
+        entry = self.assets.get(rel)
+        return entry.get("best_window") if entry else None
 
     def is_bad(self, rel: str) -> bool:
         entry = self.assets.get(rel)
