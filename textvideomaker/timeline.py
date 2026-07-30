@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
@@ -16,7 +16,7 @@ _EPS = 0.05
 @dataclass
 class Clip:
     index: int
-    kind: str  # "image" | "video"
+    kind: str  # "image" | "video" | "collage"
     src: Path
     start: float  # absolute position in the output video
     duration: float
@@ -29,6 +29,9 @@ class Clip:
     source_gain: float
     transition_type: str = "none"  # transition INTO this clip from the previous
     transition_duration: float = 0.0
+    cells: list[Path] = field(default_factory=list)  # collage cell images
+    layout: str = ""  # collage preset name
+    gap: int = 0  # collage gap, px at 1080-wide reference
 
     @property
     def end(self) -> float:
@@ -63,7 +66,13 @@ def build_timeline(spec: Spec, base_dir: Path, prober: Prober) -> Timeline:
     prev_duration = 0.0
     for i, seg in enumerate(spec.segments):
         src = (base_dir / seg.source).resolve()
-        if seg.image is not None:
+        cells: list[Path] = []
+        if seg.layout is not None:
+            duration = float(seg.duration)  # validated present
+            in_offset = 0.0
+            kind = "collage"
+            cells = [(base_dir / c).resolve() for c in (seg.cells or [])]
+        elif seg.image is not None:
             duration = float(seg.duration)  # validated present
             in_offset = 0.0
             kind = "image"
@@ -120,7 +129,8 @@ def build_timeline(spec: Spec, base_dir: Path, prober: Prober) -> Timeline:
             background=spec.background_for(seg), text=seg.text,
             style=spec.style_for(seg), source_audio=seg.source_audio,
             source_gain=seg.source_gain, transition_type=t_type,
-            transition_duration=t_dur,
+            transition_duration=t_dur, cells=cells, layout=seg.layout or "",
+            gap=seg.gap,
         ))
         end_prev = start + duration
         prev_duration = duration

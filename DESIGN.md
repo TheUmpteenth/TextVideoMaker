@@ -273,13 +273,21 @@ suggested) every time.
 *Still to do:* **M4d (deferred)** face detection / aesthetic ML model. Person-level
 `subject` auto-tagging needs face embeddings and stays deferred — manual tags for now.
 
-**M5 — multiple images per frame (collage / layout)**
-Extend a segment from one visual to a *layout* of several fitted images composited
-together. Scope to **preset layouts** first — `layout: split-2 | grid-3 | grid-4` — not
-free-form x/y positioning (that stays a "later idea"). Renderer composites each cell with
-the existing fit math; the generator can auto-fill a layout from a cluster of related
-shots surfaced by M4. This is the largest change to the segment model, so it comes after
-the generator and selection are proven.
+**M5 — multiple images per frame (collage / layout) — DONE (capability)**
+A segment can now be a `layout` (preset name) + `cells` (image list) instead of a single
+`image`/`video`. Presets are `LAYOUTS` in layout.py mapping name → (rows, cols):
+`split-2` (2×1), `split-2h` (1×2), `grid-3` (3×1), `grid-4` (2×2) — add an entry to grow
+the set. A collage renders as a single baked still: each cell is fitted with the existing
+`fit_image` (per-cell `fit`/`background`), composited with a `gap` (px at 1080 ref), and
+text bakes on top — so it flows through the pipeline exactly like an image segment (no
+ffmpeg multi-stream work). Validated: exactly one of image/video/layout, cell count must
+match the preset, stills need `duration`. Free-form x/y/z positioning stays a "later idea".
+
+*Not yet done — generator auto-collage.* The generator can't yet emit collage segments.
+Worth noting the design wrinkle: M4b near-duplicate *clusters* are too similar to make a
+good collage (four near-identical frames), so auto-collage should pull four **distinct**
+shots (ideally different subjects once that lands), not a dup cluster — an opt-in
+`--collage` feature for a later pass.
 
 **Later ideas** (kept out of scope until wanted): free-form multi-element layout with
 x/y/z positioning, beat-synced cuts, animated text/karaoke captions, Ken Burns on photos,

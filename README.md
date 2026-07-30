@@ -117,6 +117,11 @@ segments:
     in: 3.0                  # trim source from 3.0s...
     out: 7.5                 # ...to 7.5s
     text_style: { position: top }
+  - layout: grid-4          # collage: split-2 | split-2h | grid-3 | grid-4
+    duration: 3.0
+    gap: 10                 # px between cells
+    cells: [a.jpg, b.jpg, c.jpg, d.jpg]
+    text: "Four shots, one frame"
 ```
 
 Paths are relative to the spec file. Text wraps automatically; explicit line

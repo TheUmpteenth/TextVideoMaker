@@ -17,6 +17,8 @@ from pydantic import (
     model_validator,
 )
 
+from .layout import LAYOUTS, layout_cell_count
+
 SIZE_NAMES = {
     "vertical": (1080, 1920),
     "square": (1080, 1080),
@@ -193,7 +195,10 @@ class Segment(BaseModel):
 
     image: Optional[str] = None
     video: Optional[str] = None
-    duration: Optional[float] = None  # images only
+    layout: Optional[str] = None  # collage preset (split-2 / grid-3 / grid-4 / ...)
+    cells: Optional[list[str]] = None  # image paths for a layout segment
+    gap: int = 8  # px at 1080-wide reference, between/around collage cells
+    duration: Optional[float] = None  # images / collages
     in_: Optional[float] = Field(None, alias="in")  # videos only
     out: Optional[float] = None  # videos only
     fit: Optional[FitMode] = None
@@ -211,18 +216,27 @@ class Segment(BaseModel):
 
     @model_validator(mode="after")
     def _check(self) -> "Segment":
-        if (self.image is None) == (self.video is None):
-            raise ValueError("must have exactly one of 'image' or 'video'")
-        if self.image is not None:
-            if self.duration is None:
-                raise ValueError("image segments require 'duration'")
-            if self.duration <= 0:
-                raise ValueError("'duration' must be positive")
-            if self.in_ is not None or self.out is not None:
-                raise ValueError("'in'/'out' only apply to video segments")
-            if self.source_audio != "mute":
-                raise ValueError("'source_audio' only applies to video segments")
-        else:
+        kinds = [self.image is not None, self.video is not None, self.layout is not None]
+        if sum(kinds) != 1:
+            raise ValueError("must have exactly one of 'image', 'video', or 'layout'")
+        if self.cells is not None and self.layout is None:
+            raise ValueError("'cells' only apply to a 'layout' segment")
+
+        if self.layout is not None:
+            if self.layout not in LAYOUTS:
+                raise ValueError(
+                    f"unknown layout {self.layout!r}; choose from {sorted(LAYOUTS)}"
+                )
+            need = layout_cell_count(self.layout)
+            if not self.cells or len(self.cells) != need:
+                raise ValueError(
+                    f"layout {self.layout!r} needs exactly {need} cells, "
+                    f"got {len(self.cells or [])}"
+                )
+            self._require_still()
+        elif self.image is not None:
+            self._require_still()
+        else:  # video
             if self.duration is not None:
                 raise ValueError("video segments use 'in'/'out' trims, not 'duration'")
             if self.in_ is not None and self.in_ < 0:
@@ -231,9 +245,27 @@ class Segment(BaseModel):
                 raise ValueError("'out' must be greater than 'in'")
         return self
 
+    def _require_still(self) -> None:
+        """Shared checks for still (image/collage) segments."""
+        if self.duration is None:
+            raise ValueError("image/layout segments require 'duration'")
+        if self.duration <= 0:
+            raise ValueError("'duration' must be positive")
+        if self.in_ is not None or self.out is not None:
+            raise ValueError("'in'/'out' only apply to video segments")
+        if self.source_audio != "mute":
+            raise ValueError("'source_audio' only applies to video segments")
+
+    @property
+    def sources(self) -> list[str]:
+        """All asset paths this segment references."""
+        if self.layout is not None:
+            return list(self.cells or [])
+        return [self.image if self.image is not None else self.video]  # type: ignore[list-item]
+
     @property
     def source(self) -> str:
-        return self.image if self.image is not None else self.video  # type: ignore[return-value]
+        return self.sources[0]
 
 
 class Spec(BaseModel):
@@ -303,8 +335,9 @@ def load_spec(path: str | Path) -> tuple[Spec, Path]:
 def _check_files_exist(spec: Spec, base_dir: Path) -> None:
     missing: list[str] = []
     for i, seg in enumerate(spec.segments):
-        if not (base_dir / seg.source).is_file():
-            missing.append(f"segments[{i}]: file not found: {seg.source}")
+        for src in seg.sources:
+            if not (base_dir / src).is_file():
+                missing.append(f"segments[{i}]: file not found: {src}")
         font = seg.text_style.font or spec.defaults.text_style.font
         if font and not (base_dir / font).is_file() and not Path(font).is_file():
             missing.append(f"segments[{i}]: font not found: {font}")

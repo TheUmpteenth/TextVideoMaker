@@ -6,9 +6,11 @@ from pathlib import Path
 
 from PIL import Image
 
-from .layout import fit_image, video_fit_nodes
+from .layout import fit_image, render_collage, video_fit_nodes
 from .text_render import render_text_image
 from .timeline import Timeline
+
+REFERENCE_WIDTH = 1080  # gap is defined in px at this frame width
 
 AUDIO_RATE = 48000
 _ALOOP_MAX = 2147483647  # aloop 'size' cap (samples)
@@ -47,10 +49,20 @@ def build_render_command(
     seg_labels: list[str] = []
     for clip in timeline.clips:
         label = f"v{clip.index}"
-        if clip.kind == "image":
-            # Fit + bake text in Pillow so ffmpeg gets an exact-frame still
-            with Image.open(clip.src) as im:
-                frame = fit_image(im, width, height, clip.fit, clip.background)
+        if clip.kind in ("image", "collage"):
+            # Fit / compose + bake text in Pillow so ffmpeg gets an exact-frame still
+            if clip.kind == "collage":
+                cell_imgs = [Image.open(c) for c in clip.cells]
+                try:
+                    gap_px = round(clip.gap * width / REFERENCE_WIDTH)
+                    frame = render_collage(cell_imgs, clip.layout, width, height,
+                                           gap_px, clip.background, clip.fit)
+                finally:
+                    for im in cell_imgs:
+                        im.close()
+            else:
+                with Image.open(clip.src) as im:
+                    frame = fit_image(im, width, height, clip.fit, clip.background)
             if clip.text:
                 overlay = render_text_image(clip.text, clip.style, width, height, base_dir)
                 frame = Image.alpha_composite(frame.convert("RGBA"), overlay).convert("RGB")

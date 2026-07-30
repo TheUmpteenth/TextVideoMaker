@@ -7,6 +7,20 @@ import math
 from PIL import Image, ImageColor, ImageFilter, ImageOps
 
 
+# Preset collage layouts -> (rows, cols). Add entries here to grow the set.
+LAYOUTS: dict[str, tuple[int, int]] = {
+    "split-2": (2, 1),   # two stacked
+    "split-2h": (1, 2),  # two side by side
+    "grid-3": (3, 1),    # a vertical strip of three
+    "grid-4": (2, 2),    # a 2x2 grid
+}
+
+
+def layout_cell_count(name: str) -> int:
+    rows, cols = LAYOUTS[name]
+    return rows * cols
+
+
 def parse_color(spec: str) -> tuple[int, int, int]:
     """Any spec Pillow understands -> an opaque RGB tuple (alpha dropped)."""
     return ImageColor.getrgb(spec)[:3]
@@ -71,6 +85,30 @@ def fit_image(img: Image.Image, dst_w: int, dst_h: int, mode: str,
     else:  # contain
         canvas = Image.new("RGB", (dst_w, dst_h), bg)
     canvas.paste(fitted, ((dst_w - new_w) // 2, (dst_h - new_h) // 2))
+    return canvas
+
+
+def layout_rects(name: str, frame_w: int, frame_h: int, gap: int) -> list[tuple[int, int, int, int]]:
+    """Cell rectangles (x, y, w, h) for a preset layout, with `gap` px around each."""
+    rows, cols = LAYOUTS[name]
+    cell_w = (frame_w - (cols + 1) * gap) // cols
+    cell_h = (frame_h - (rows + 1) * gap) // rows
+    rects = []
+    for r in range(rows):
+        for c in range(cols):
+            rects.append((gap + c * (cell_w + gap), gap + r * (cell_h + gap),
+                          cell_w, cell_h))
+    return rects
+
+
+def render_collage(cell_images: list[Image.Image], name: str, frame_w: int,
+                   frame_h: int, gap: int, background: str = "black",
+                   fit: str = "cover") -> Image.Image:
+    """Composite images into the preset layout's cells (each fitted per `fit`)."""
+    rects = layout_rects(name, frame_w, frame_h, gap)
+    canvas = Image.new("RGB", (frame_w, frame_h), parse_color(background))
+    for img, (x, y, w, h) in zip(cell_images, rects):
+        canvas.paste(fit_image(img, w, h, fit, background), (x, y))
     return canvas
 
 
