@@ -289,10 +289,60 @@ good collage (four near-identical frames), so auto-collage should pull four **di
 shots (ideally different subjects once that lands), not a dup cluster — an opt-in
 `--collage` feature for a later pass.
 
-**Later ideas** (kept out of scope until wanted): free-form multi-element layout with
-x/y/z positioning, beat-synced cuts, animated text/karaoke captions, Ken Burns on photos,
-multiple text blocks per segment, a global caption track, template specs with variables,
-burned-in subtitles from SRT, simple GUI or web preview.
+## Aesthetic direction: punk / DIY (guiding principle)
+
+There is evidence that **rougher, more DIY-looking videos get more engagement** than
+polished ones. So polish is *not* automatically the goal. Concretely:
+
+- Keep lo-fi / scrappy looks first-class: hard cuts, imperfect timing, hand-made
+  stickers, grain/VHS/jitter filters, off-grid text. Don't sand these off by default.
+- When we add "produced" features (Ken Burns, beat-sync, smooth transitions), make them
+  **optional and off by default**, not baked in — the tool should make it just as easy to
+  look intentionally scrappy as slick.
+- Bias new defaults toward "authentic phone-made" over "TV ad." Slick is an option, not
+  the target.
+
+## Stretch goals / backlog
+
+Grouped, roughly by theme. None are committed; the aesthetic principle above governs how
+each is built (optional, not always-on).
+
+**Motion & rhythm** (make it feel produced — opt-in):
+- *Ken Burns* — slow zoom/pan on stills so photos breathe (ffmpeg `zoompan`).
+- *Beat-synced cuts* — align segment boundaries to the music's beat (needs beat/onset
+  detection, e.g. `librosa`).
+- *Animated / karaoke captions* — word-by-word text reveal.
+- *More transitions* — slides, wipes, fade-to-black between segments (`TRANSITION_MAP` and
+  the `Transition` enum are already structured for this) — and transitions *between
+  elements* within a frame.
+
+**Smarter generation:**
+- *Auto-collage* (`--collage`) — the M5 follow-on: build a grid from *distinct* shots (not
+  near-dup clusters, which are too similar).
+- *M4d* — face detection / person-level `subject` auto-tagging; optional aesthetic ML score.
+
+**Overlays & branding:**
+- *Watermarks* — persistent logo/handle overlay.
+- *Stickers* — emoji/graphic overlays, positioned (lean into hand-made/DIY styles).
+- *Filters* — colour grades and lo-fi looks (grain, VHS, chromatic aberration) — directly
+  serves the punk/DIY principle.
+- *Text extras* — multiple text blocks per segment, a global caption track spanning
+  segments, burned-in subtitles from SRT.
+
+**Editing UIs** (the big one — a GUI suite that all edits *down to the spec format*, so the
+deterministic text-spec core stays the source of truth):
+- *Timeline GUI* — arrange/reorder segments visually.
+- *Video-splicing GUI* — trim/cut/split clips by picking in/out visually.
+- *Transitions GUI* — pick and preview transitions between elements.
+- *Filters GUI* — apply/preview filters and grades.
+- *Live preview / web preview*.
+
+**Packaging & DX:**
+- *Standalone `.exe`* (PyInstaller, onedir) so it runs with no Python env.
+- *`generate --render`* — emit and draft-render a batch in one step.
+- *Render progress output*; *template specs with variables*.
+
+**Later still:** free-form multi-element layout with x/y/z positioning.
 
 Sequencing note: M2 (control) and M3 (generator) are independent; the generator is the
 current priority pull and can be built before M2 if desired. M4 feeds M3, and M5 builds
