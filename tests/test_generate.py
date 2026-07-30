@@ -178,3 +178,23 @@ def test_rank_drops_bad_and_favours_good(tmp_path):
         seen_first.add(spec["segments"][0]["image"])
     # the top-scored shot should headline at least once across the batch
     assert any("pic_1" in v for v in seen_first)
+
+
+def test_rank_dedupes_near_duplicates_within_video(tmp_path):
+    from textvideomaker.analyze import RankIndex
+    for i in range(6):
+        Image.new("RGB", (640, 480), (i * 30, 20, 20)).save(tmp_path / f"pic_{i}.png")
+    Image.new("RGB", (500, 500), (255, 255, 240)).save(tmp_path / "Bruach_logo.png")
+    rank = RankIndex({
+        "pic_0.png": {"score": 80, "flags": [], "cluster": 1},
+        "pic_1.png": {"score": 78, "flags": [], "cluster": 1},  # near-dup of pic_0
+        "pic_2.png": {"score": 70, "flags": [], "cluster": 2},
+        "pic_3.png": {"score": 68, "flags": [], "cluster": 3},
+        "pic_4.png": {"score": 66, "flags": [], "cluster": 4},
+        "pic_5.png": {"score": 64, "flags": [], "cluster": 5},
+    })
+    for s in range(6):
+        _, spec = gen(tmp_path, ["h"], count=1, length=20, seed=s, rank=rank)[0]
+        imgs = [seg.get("image", "") for seg in spec["segments"]]
+        both = [x for x in imgs if "pic_0.png" in x or "pic_1.png" in x]
+        assert len(both) <= 1  # never two from the same near-duplicate cluster

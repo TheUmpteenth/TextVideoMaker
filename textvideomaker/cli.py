@@ -18,6 +18,7 @@ from .analyze import (
     RankReportItem,
     analyze_image,
     build_rank_html,
+    cluster_by_hash,
     load_analysis,
     save_analysis,
 )
@@ -204,14 +205,27 @@ def cmd_rank(args: argparse.Namespace) -> int:
     if not report:
         raise SpecError(f"No images found under {folder}")
 
+    # near-duplicate clustering across everything we analysed
+    clusters = cluster_by_hash({it.name: it.stats.phash for it in report})
+    sizes: dict[int, int] = {}
+    for cid in clusters.values():
+        sizes[cid] = sizes.get(cid, 0) + 1
+    for it in report:
+        cid = clusters.get(it.name)
+        if cid is not None:
+            assets[it.name]["cluster"] = cid
+            it.dup_group = sizes.get(cid, 1)
+
     save_analysis(folder, data)
-    report.sort(key=lambda it: it.stats.score)  # worst first
+    report.sort(key=lambda it: (it.stats.score, it.name))  # worst first
     rank_dir.mkdir(parents=True, exist_ok=True)
     (rank_dir / "rank.html").write_text(
         build_rank_html(report, folder.name), encoding="utf-8")
 
     flagged = sum(1 for it in report if it.stats.flags)
-    print(f"Analysed {len(report)} images ({n_new} new/changed), {flagged} flagged")
+    dup_groups = sum(1 for c in sizes.values() if c > 1)
+    print(f"Analysed {len(report)} images ({n_new} new/changed), {flagged} flagged, "
+          f"{dup_groups} near-duplicate groups")
     print(f"  analysis: {folder / 'analysis.json'}")
     print(f"  contact sheet: {rank_dir / 'rank.html'}")
     return 0

@@ -84,12 +84,14 @@ Install the analysis extra and score your images so the generator can favour the
 .venv\Scripts\tvm generate C:\path\to\assets --texts hooks.txt --count 20 --rank
 ```
 
-`tvm rank` scores each image on sharpness, exposure, and resolution, writes `analysis.json`,
-and builds a worst-first `rank\rank.html` contact sheet (scores + flags + thumbnails).
-`generate --rank` then drops clearly-bad shots (tiny / very low score) and weights selection
-toward higher-scoring images. It measures *quality*, not *content* — for "don't use this at
-all" (textures, logos-as-shots) keep using `assets.yaml`'s `exclude`; anything in
-`assets.yaml` overrides the scores.
+`tvm rank` scores each image on sharpness, exposure, and resolution, detects near-duplicates
+(perceptual hash), writes `analysis.json`, and builds a worst-first `rank\rank.html` contact
+sheet (scores + flags + `dup×N` badges + thumbnails). `generate --rank` then drops
+clearly-bad shots (tiny / very low score), weights selection toward higher-scoring images,
+and keeps near-duplicate shots (burst frames, `photo`/`photo(1)` copies) out of the same
+video. It measures *quality*, not *content* — for "don't use this at all" (textures,
+logos-as-shots) keep using `assets.yaml`'s `exclude`; anything in `assets.yaml` overrides
+the scores.
 
 ## Spec format
 

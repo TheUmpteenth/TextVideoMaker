@@ -39,6 +39,15 @@ def _numpy():
         ) from None
 
 
+def _try_imagehash():
+    """imagehash is optional; without it we simply skip duplicate detection."""
+    try:
+        import imagehash
+        return imagehash
+    except ImportError:
+        return None
+
+
 @dataclass
 class ImageStats:
     width: int
@@ -49,6 +58,7 @@ class ImageStats:
     blown_frac: float
     score: float
     flags: list[str] = field(default_factory=list)
+    phash: str = ""  # perceptual hash hex (empty if imagehash unavailable)
 
     def to_json(self, mtime: float, size: int) -> dict:
         d = asdict(self)
@@ -83,9 +93,11 @@ def score_metrics(sharpness: float, brightness: float, dark_frac: float,
 
 def analyze_image(path: Path, thumb_path: Optional[Path] = None) -> ImageStats:
     np = _numpy()
+    ih = _try_imagehash()
     with Image.open(path) as im:
         im = ImageOps.exif_transpose(im)
         w, h = im.size
+        phash = str(ih.phash(im)) if ih else ""
         if thumb_path is not None:
             thumb = im.convert("RGB")
             thumb.thumbnail((_THUMB_DIM, _THUMB_DIM), Image.LANCZOS)
@@ -108,7 +120,49 @@ def analyze_image(path: Path, thumb_path: Optional[Path] = None) -> ImageStats:
         width=w, height=h, sharpness=round(sharpness, 1),
         brightness=round(brightness, 1), dark_frac=round(dark_frac, 3),
         blown_frac=round(blown_frac, 3), score=round(score, 1), flags=flags,
+        phash=phash,
     )
+
+
+# ---- near-duplicate clustering (M4b) ----------------------------------------
+
+DUP_THRESHOLD = 10  # max Hamming distance (of a 64-bit pHash) to call a near-dup
+
+
+def cluster_by_hash(hashes: dict[str, str], threshold: int = DUP_THRESHOLD) -> dict[str, int]:
+    """Group keys whose perceptual hashes are within `threshold` bits.
+
+    Returns {key: cluster_id}. Keys with an empty/invalid hash each get their
+    own singleton cluster (never merged). Union-find over pairwise distances.
+    """
+    items = [(k, int(h, 16)) for k, h in hashes.items() if h]
+    parent = {k: k for k, _ in items}
+
+    def find(x):
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    for i in range(len(items)):
+        ki, hi = items[i]
+        for j in range(i + 1, len(items)):
+            kj, hj = items[j]
+            if bin(hi ^ hj).count("1") <= threshold:
+                parent[find(ki)] = find(kj)
+
+    result: dict[str, int] = {}
+    roots: dict[str, int] = {}
+    for key in hashes:  # preserve input order for stable ids
+        if key not in parent:  # no/invalid hash -> its own cluster
+            result[key] = len(roots)
+            roots[f"__solo_{key}"] = result[key]
+            continue
+        r = find(key)
+        if r not in roots:
+            roots[r] = len(roots)
+        result[key] = roots[r]
+    return result
 
 
 # ---- analysis.json cache ----------------------------------------------------
@@ -137,6 +191,7 @@ class RankReportItem:
     thumb: str          # relative path to the thumbnail
     stats: ImageStats
     excluded: bool      # manually excluded via assets.yaml
+    dup_group: int = 1  # size of this image's near-duplicate cluster
 
 
 def build_rank_html(items: list[RankReportItem], title: str) -> str:
@@ -146,6 +201,8 @@ def build_rank_html(items: list[RankReportItem], title: str) -> str:
         s = it.stats
         flag_html = "".join(
             f'<span class="flag">{html.escape(f)}</span>' for f in s.flags)
+        if it.dup_group > 1:
+            flag_html += f'<span class="flag dup">dup×{it.dup_group}</span>'
         if it.excluded:
             flag_html += '<span class="flag manual">excluded</span>'
         cards.append(f"""      <figure class="card{' dim' if it.excluded else ''}">
@@ -187,6 +244,7 @@ def build_rank_html(items: list[RankReportItem], title: str) -> str:
   .flag {{ display:inline-block; font-size:11px; padding:1px 6px; border-radius:4px;
            background:#5a2330; color:#ffb3c0; margin-right:4px; }}
   .flag.manual {{ background:#2a2b31; color:#9a9aa2; }}
+  .flag.dup {{ background:#3a3320; color:#f0d38a; }}
   .meta {{ color:#83838c; font-size:11px; }}
 </style>
 </head>
@@ -219,6 +277,10 @@ class RankIndex:
     def score(self, rel: str) -> Optional[float]:
         entry = self.assets.get(rel)
         return entry["score"] if entry else None
+
+    def cluster(self, rel: str) -> Optional[int]:
+        entry = self.assets.get(rel)
+        return entry.get("cluster") if entry else None
 
     def is_bad(self, rel: str) -> bool:
         entry = self.assets.get(rel)

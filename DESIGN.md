@@ -248,8 +248,17 @@ plus weighting (which is the intended, conservative behaviour). And the heuristi
 *quality*, not *content*: "not a real photo" (distressed textures, a logo used as a shot)
 scores fine and must still be handled by `assets.yaml exclude`. The two are complementary.
 
-*Still to do:* **M4b** near-duplicate clustering (perceptual hash, `imagehash`) to dedupe
-the pool; **M4c** video frame sampling to score clips and auto-suggest the sharpest
+*M4b — near-duplicate clustering — DONE.* `tvm rank` computes a perceptual hash
+(`imagehash.phash`) per image and unions them into clusters by Hamming distance
+(`DUP_THRESHOLD = 10` bits over a 64-bit hash); cluster ids are stored in `analysis.json`
+and duplicates are badged `dup×N` in the contact sheet. `tvm generate --rank` keeps at
+most one asset per cluster within a video (dedupes the weighted-ordered pool, keeping the
+best of each group), so burst shots and the `DSC…(1)` copies never appear together.
+Verified on 306 images → 121 near-dup groups; every `DSC(1)` pair clustered, and a ranked
+batch produced 0 videos with an internal near-dup. imagehash is optional (part of the
+`[analyze]` extra); without it, hashes are empty and clustering is simply skipped.
+
+*Still to do:* **M4c** video frame sampling to score clips and auto-suggest the sharpest
 `usable` window; **M4d (deferred)** face detection / aesthetic ML model. Person-level
 `subject` auto-tagging needs face embeddings and stays deferred — manual tags for now.
 

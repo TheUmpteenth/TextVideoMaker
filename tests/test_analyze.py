@@ -8,6 +8,7 @@ from textvideomaker.analyze import (
     ANALYSIS_VERSION,
     RankIndex,
     analyze_image,
+    cluster_by_hash,
     load_analysis,
     save_analysis,
     score_metrics,
@@ -58,7 +59,7 @@ def test_load_analysis_missing_is_empty(tmp_path):
 
 def test_rank_index_behaviour():
     idx = RankIndex({
-        "good.jpg": {"score": 80.0, "flags": []},
+        "good.jpg": {"score": 80.0, "flags": [], "cluster": 3},
         "sliver.jpg": {"score": 55.0, "flags": ["tiny"]},
         "murky.jpg": {"score": 12.0, "flags": ["dark"]},
     })
@@ -68,3 +69,41 @@ def test_rank_index_behaviour():
     assert not idx.is_bad("unknown.jpg")      # unscored -> not filtered
     assert idx.weight("good.jpg") > idx.weight("murky.jpg")
     assert idx.weight("unknown.jpg") == 0.6   # neutral
+    assert idx.cluster("good.jpg") == 3
+    assert idx.cluster("sliver.jpg") is None  # no cluster key
+    assert idx.cluster("unknown.jpg") is None
+
+
+# ---- M4b: perceptual hash + clustering --------------------------------------
+
+def test_phash_is_deterministic_and_near_for_similar(tmp_path):
+    rng = np.random.default_rng(1)
+    base = (rng.integers(0, 256, (300, 300, 3))).astype("uint8")
+    Image.fromarray(base, "RGB").save(tmp_path / "a.png")
+    Image.fromarray(base, "RGB").save(tmp_path / "a_copy.png")   # identical
+    # a clearly different image
+    Image.fromarray(base[::-1, ::-1], "RGB").save(tmp_path / "b.png")
+
+    ha = analyze_image(tmp_path / "a.png").phash
+    ha2 = analyze_image(tmp_path / "a_copy.png").phash
+    hb = analyze_image(tmp_path / "b.png").phash
+    assert ha and ha == ha2                                     # deterministic, dup matches
+    assert bin(int(ha, 16) ^ int(hb, 16)).count("1") > 10       # far from the different one
+
+
+def test_cluster_by_hash_groups_duplicates():
+    # x and x2 identical; y one bit off; z far away
+    clusters = cluster_by_hash({
+        "x": "ffff0000ffff0000",
+        "x2": "ffff0000ffff0000",
+        "y": "ffff0000ffff0001",   # 1 bit from x
+        "z": "0123456789abcdef",
+    })
+    assert clusters["x"] == clusters["x2"] == clusters["y"]     # near-dups together
+    assert clusters["z"] != clusters["x"]                        # distinct
+
+
+def test_cluster_missing_hash_is_singleton():
+    clusters = cluster_by_hash({"a": "", "b": "", "c": "ffffffffffffffff"})
+    assert clusters["a"] != clusters["b"] != clusters["c"]
+    assert len({clusters["a"], clusters["b"], clusters["c"]}) == 3

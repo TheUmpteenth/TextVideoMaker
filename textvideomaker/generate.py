@@ -209,9 +209,23 @@ def _rel_to(path: Path, folder: Path) -> str:
     return os.path.relpath(path, folder).replace(os.sep, "/")
 
 
+def _dedupe_clusters(pool: list[Asset], rank: RankIndex, folder: Path) -> list[Asset]:
+    """Keep at most one asset per near-duplicate cluster (the first, i.e. best)."""
+    seen: set[int] = set()
+    out: list[Asset] = []
+    for a in pool:
+        cid = rank.cluster(_rel_to(a.path, folder))
+        if cid is not None:
+            if cid in seen:
+                continue
+            seen.add(cid)
+        out.append(a)
+    return out
+
+
 def _ordered_pool(pool: list[Asset], rng: random.Random,
                   rank: Optional[RankIndex], folder: Path) -> list[Asset]:
-    """A (weighted, if ranked) shuffle followed by subject-spread."""
+    """A (weighted, if ranked) shuffle, cluster-deduped, then subject-spread."""
     if rank:
         # Efraimidis-Spirakis weighted sampling: key = u ** (1/weight), high first
         ordered = sorted(
@@ -219,6 +233,7 @@ def _ordered_pool(pool: list[Asset], rng: random.Random,
             key=lambda a: rng.random() ** (1.0 / rank.weight(_rel_to(a.path, folder))),
             reverse=True,
         )
+        ordered = _dedupe_clusters(ordered, rank, folder)  # best of each near-dup group
     else:
         ordered = pool[:]
         rng.shuffle(ordered)
