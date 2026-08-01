@@ -310,22 +310,57 @@ each is built (optional, not always-on).
 **Motion & rhythm** (make it feel produced — opt-in):
 - *Ken Burns* — slow zoom/pan on stills so photos breathe (ffmpeg `zoompan`).
 - *Beat-synced cuts* — align segment boundaries to the music's beat (needs beat/onset
-  detection, e.g. `librosa`).
-- *Animated / karaoke captions* — word-by-word text reveal.
+  detection, e.g. `librosa`). Consider a deliberate human-feel offset so it doesn't read
+  as over-produced.
+- *Animated / karaoke captions* — word-by-word text reveal; for a band, lyric/shout
+  fragments over live footage (pairs with `source_audio: mix` singalongs).
 - *More transitions* — slides, wipes, fade-to-black between segments (`TRANSITION_MAP` and
   the `Transition` enum are already structured for this) — and transitions *between
   elements* within a frame.
 
+**Punk / DIY looks** (the signature — *lean in*, per the aesthetic principle):
+- *Ransom-note / zine typography* — the standout idea. Spell captions from **cut-out
+  letter images** rather than a clean font: a library of transparent letter-glyph PNGs
+  (torn/tape edges, magazine/newsprint backing), composited per character with random
+  variant selection and per-letter jitter in size / rotation / baseline, so the same word
+  never renders twice the same. Ways to seed the library: (a) hand-cut real print and scan
+  it, (b) generate grungy glyphs, (c) a few "zine" display fonts as a lighter fallback.
+  *Sourcing note:* make/scan our own cut-outs (or use public-domain / CC print) rather than
+  scraping magazines — the ransom-note *look* isn't copyrightable, but a recognisable
+  branded logo-letter could raise trademark issues. Shares the compositing path with
+  *stickers* below.
+- *Rough-cut `style: raw` mode* — one knob for "phone-thrown-together": hard cuts only,
+  slight random rotation/jitter on stills, crushed/blown contrast, grain/VHS overlay, fake
+  camcorder datestamp. The inverse of a polish toggle.
+- *Lo-fi filters* — grain, VHS, xerox/photocopy, chromatic aberration, contrast
+  crush/blowout. Directly serves the principle (also usable as a plain grade).
+- *Deliberate-imperfection engine* — seed-driven micro-variation in timing / position /
+  rotation so no two renders look identically "clean," and each looks human-made. Builds
+  on the generator's existing seed.
+
 **Smarter generation:**
+- *Re-aim the quality ranker* — driven by the punk/DIY finding: sharp ≠ engaging. Reframe
+  M4 from "prefer the glossy shot" to "reject only technical **garbage** you truly can't
+  use" (black frames, total motion smear); stop penalising grain / softness / low-light,
+  which are character, not defects.
+- *Engagement feedback loop* — a `posted.csv` (video → views / likes / saves) fed back so
+  the generator learns which hooks, pacing, and looks work for *this* audience. Turns "DIY
+  does better" from a hunch into a measured signal.
+- *Chaos mode* (`generate --chaos`) — emit N deliberately **different** takes (orderings,
+  layouts, filters, text placement), not N similar ones. Variety beats optimisation when
+  engagement is unpredictable; fits the existing seed system.
 - *Auto-collage* (`--collage`) — the M5 follow-on: build a grid from *distinct* shots (not
   near-dup clusters, which are too similar).
 - *M4d* — face detection / person-level `subject` auto-tagging; optional aesthetic ML score.
 
-**Overlays & branding:**
+**Overlays, branding & formats:**
 - *Watermarks* — persistent logo/handle overlay.
-- *Stickers* — emoji/graphic overlays, positioned (lean into hand-made/DIY styles).
-- *Filters* — colour grades and lo-fi looks (grain, VHS, chromatic aberration) — directly
-  serves the punk/DIY principle.
+- *Stickers* — emoji/graphic overlays, positioned (lean into hand-made/DIY styles; shares
+  the compositing path with ransom-note letters).
+- *Platform safe-zones* — a guide/preview so captions don't hide behind the
+  TikTok / Reels / Shorts UI (bottom third, right rail).
+- *Meme / caption-top format* — impact-font top+bottom, or a tweet / iMessage-screenshot
+  over live footage. Very native to the feed.
 - *Text extras* — multiple text blocks per segment, a global caption track spanning
   segments, burned-in subtitles from SRT.
 
