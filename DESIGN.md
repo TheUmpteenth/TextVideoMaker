@@ -339,10 +339,15 @@ each is built (optional, not always-on).
   on the generator's existing seed.
 
 **Smarter generation:**
-- *Re-aim the quality ranker* — driven by the punk/DIY finding: sharp ≠ engaging. Reframe
-  M4 from "prefer the glossy shot" to "reject only technical **garbage** you truly can't
-  use" (black frames, total motion smear); stop penalising grain / softness / low-light,
-  which are character, not defects.
+- *Re-aim the quality ranker* — **DONE.** Driven by the punk/DIY finding (sharp ≠
+  engaging). `is_bad` now rejects only genuine **garbage** from raw metrics — too-low-res,
+  near-black (`dark_frac > 0.92`), near-white/blank (`blown_frac > 0.9`), or blank/total-
+  smear (`sharpness < 12`) — instead of "score < 20", so soft/dark/grainy shots are kept.
+  `score_metrics` was rebalanced (sharpness weight 0.55 → 0.35, +baseline, softer darkness
+  penalty) and `weight` compressed to a gentle preference (floor 0.5). Verified on 306 real
+  images: selection bias fell from 2.3× to 1.3×, the softest shots' pick-weight roughly
+  doubled, only genuinely low-res shots stay filtered, and a blown-logo false positive was
+  fixed. `ANALYSIS_VERSION` bumped so old caches recompute.
 - *Engagement feedback loop* — a `posted.csv` (video → views / likes / saves) fed back so
   the generator learns which hooks, pacing, and looks work for *this* audience. Turns "DIY
   does better" from a hunch into a measured signal.

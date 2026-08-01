@@ -49,6 +49,13 @@ def test_score_metrics_ranges():
     assert gflags == []
 
 
+def test_soft_shot_is_not_cratered():
+    """A soft, grainy, dim-but-usable shot keeps a fair score (character, not defect)."""
+    soft, flags = score_metrics(45, 70, 0.25, 0.0, 1080, 1080)
+    assert soft > 40           # not punished into the ground
+    assert "blurry" in flags   # still flagged for information
+
+
 def test_analysis_cache_round_trip(tmp_path):
     data = {"version": ANALYSIS_VERSION, "assets": {"a.png": {"score": 42.0}}}
     save_analysis(tmp_path, data)
@@ -62,18 +69,34 @@ def test_load_analysis_missing_is_empty(tmp_path):
     assert got["assets"] == {}
 
 
-def test_rank_index_behaviour():
+def test_rank_index_keeps_character_filters_garbage():
     idx = RankIndex({
-        "good.jpg": {"score": 80.0, "flags": [], "cluster": 3},
-        "sliver.jpg": {"score": 55.0, "flags": ["tiny"]},
-        "murky.jpg": {"score": 12.0, "flags": ["dark"]},
+        "good.jpg":  {"score": 80.0, "flags": [], "sharpness": 500,
+                      "dark_frac": 0.0, "blown_frac": 0.0, "cluster": 3},
+        "moody.jpg": {"score": 24.0, "flags": ["dark", "blurry"], "sharpness": 40,
+                      "dark_frac": 0.55, "blown_frac": 0.0},   # soft + dim but usable
+        "sliver.jpg": {"score": 55.0, "flags": ["tiny"], "sharpness": 300,
+                       "dark_frac": 0.0, "blown_frac": 0.0},   # too low-res
+        "black.jpg": {"score": 5.0, "flags": ["dark"], "sharpness": 3,
+                      "dark_frac": 0.97, "blown_frac": 0.0},   # near-black + smeared
+        "blown.jpg": {"score": 30.0, "flags": ["blown"], "sharpness": 200,
+                      "dark_frac": 0.0, "blown_frac": 0.95},   # blank white frame
+        "highkey.jpg": {"score": 60.0, "flags": ["blown"], "sharpness": 300,
+                        "dark_frac": 0.0, "blown_frac": 0.7},  # bright/high-key, still usable
     })
-    assert idx.is_bad("sliver.jpg")           # tiny -> bad
-    assert idx.is_bad("murky.jpg")            # below LOW_SCORE -> bad
+    # genuine garbage -> filtered
+    assert idx.is_bad("sliver.jpg")
+    assert idx.is_bad("black.jpg")
+    assert idx.is_bad("blown.jpg")
+    # character shots -> KEPT (the whole point of the re-aim)
+    assert not idx.is_bad("moody.jpg")
+    assert not idx.is_bad("highkey.jpg")      # bright != blown-blank garbage
     assert not idx.is_bad("good.jpg")
     assert not idx.is_bad("unknown.jpg")      # unscored -> not filtered
-    assert idx.weight("good.jpg") > idx.weight("murky.jpg")
-    assert idx.weight("unknown.jpg") == 0.6   # neutral
+    # weighting is a gentle preference, never starves a usable shot
+    assert idx.weight("good.jpg") > idx.weight("moody.jpg")
+    assert idx.weight("moody.jpg") >= 0.5
+    assert idx.weight("unknown.jpg") == 0.6
     assert idx.cluster("good.jpg") == 3
     assert idx.cluster("sliver.jpg") is None  # no cluster key
     assert idx.cluster("unknown.jpg") is None

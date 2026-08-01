@@ -21,7 +21,7 @@ from typing import Optional
 from PIL import Image, ImageOps
 
 ANALYSIS_FILE = "analysis.json"
-ANALYSIS_VERSION = 1
+ANALYSIS_VERSION = 2  # bumped: scoring re-aimed (garbage-only rejection, softer penalties)
 _MEASURE_DIM = 512   # downscale before measuring so sharpness is resolution-independent
 _THUMB_DIM = 320
 VIDEO_WANT = 4.0     # target window length when suggesting a clip's best segment
@@ -76,12 +76,19 @@ def _clamp(v: float, lo: float = 0.0, hi: float = 1.0) -> float:
 
 def score_metrics(sharpness: float, brightness: float, dark_frac: float,
                   blown_frac: float, w: int, h: int) -> tuple[float, list[str]]:
-    """Composite 0-100 score (for ranking) plus flags (for clearly-bad shots)."""
+    """Composite 0-100 score (a gentle preference) plus flags (informational).
+
+    Deliberately not sharpness-obsessed: soft / grainy / low-light shots have
+    *character*, not defects (see the punk/DIY aesthetic principle in DESIGN.md),
+    so the score has a baseline, a reduced sharpness weight, and a softened
+    darkness penalty. Actual "don't use this" rejection lives in
+    ``RankIndex.is_bad`` and keys off genuine garbage, not this score.
+    """
     sharp_n = _clamp(sharpness / 400.0)
-    expo_n = _clamp(1.0 - 1.2 * dark_frac - 1.6 * blown_frac
-                    - max(0.0, 45.0 - brightness) / 120.0)
+    expo_n = _clamp(1.0 - 0.9 * dark_frac - 1.6 * blown_frac
+                    - max(0.0, 45.0 - brightness) / 160.0)
     res_n = _clamp((min(w, h) - 300) / 700.0)
-    score = 100.0 * (0.55 * sharp_n + 0.30 * expo_n + 0.15 * res_n)
+    score = 100.0 * (0.15 + 0.35 * sharp_n + 0.30 * expo_n + 0.20 * res_n)
 
     flags: list[str] = []
     if sharpness < 60:
@@ -403,7 +410,12 @@ def build_rank_html(items: list[RankReportItem], title: str) -> str:
 class RankIndex:
     """Read-only view over analysis.json used by the generator."""
 
-    LOW_SCORE = 20.0  # below this (or 'tiny') an asset is treated as clearly bad
+    # "Bad" means genuine technical garbage you can't use — NOT merely soft, dark,
+    # or grainy (that's character). These key off raw metrics, not the score.
+    GARBAGE_SHARPNESS = 12.0    # below this there are essentially no edges (blank/smear)
+    GARBAGE_DARK_FRAC = 0.92    # nearly the whole frame is black
+    GARBAGE_BLOWN_FRAC = 0.9    # nearly the whole frame is white (blank, not just high-key)
+    GARBAGE_SCORE = 8.0         # fallback floor for entries lacking raw metrics
 
     def __init__(self, assets: dict):
         self.assets = assets or {}
@@ -428,11 +440,27 @@ class RankIndex:
         return entry.get("best_window") if entry else None
 
     def is_bad(self, rel: str) -> bool:
+        """True only for genuine technical garbage — resolution too low to use, a
+        near-black frame, a blown-out frame, or a blank/total-smear. Soft, dark,
+        and grainy shots are kept: they read as authentic, not broken."""
         entry = self.assets.get(rel)
         if not entry:
             return False
-        return "tiny" in entry.get("flags", []) or entry["score"] < self.LOW_SCORE
+        if "tiny" in entry.get("flags", []):
+            return True
+        sharp = entry.get("sharpness")
+        if sharp is not None and sharp < self.GARBAGE_SHARPNESS:
+            return True
+        dark = entry.get("dark_frac")
+        if dark is not None and dark > self.GARBAGE_DARK_FRAC:
+            return True
+        blown = entry.get("blown_frac")
+        if blown is not None and blown > self.GARBAGE_BLOWN_FRAC:
+            return True
+        # entries without raw metrics (e.g. old caches): only a rock-bottom score
+        return entry.get("score", 100.0) < self.GARBAGE_SCORE
 
     def weight(self, rel: str) -> float:
+        # gentle preference only: even low-scoring shots keep a fair chance
         s = self.score(rel)
-        return max(0.15, s / 100.0) if s is not None else 0.6  # unscored -> neutral
+        return 0.5 + 0.5 * _clamp(s / 100.0) if s is not None else 0.6
